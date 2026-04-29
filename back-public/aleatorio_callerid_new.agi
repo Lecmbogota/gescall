@@ -1,0 +1,63 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use DBI;
+
+# Leer variables de AGI
+my %AGI;
+while(<STDIN>) {
+    chomp;
+    last unless length($_);
+    if (/^agi_(\w+)\:\s+(.*)$/) {
+        $AGI{$1} = $2;
+    }
+}
+
+# Configuración de conexión a la base de datos
+my $host = 'localhost';
+my $dbname = 'asterisk';
+my $user = 'cron';
+my $pass = '1234';
+
+# Conectarse a la base de datos
+my $dsn = "DBI:mysql:database=$dbname;host=$host;charset=utf8";
+my $dbh = DBI->connect($dsn, $user, $pass, { RaiseError => 1, AutoCommit => 1 });
+
+print "Content-type: text/plain\n\n";
+
+# Obtener un número aleatorio
+my $sth = $dbh->prepare("SELECT telefono FROM rotatelefonos ORDER BY RAND() LIMIT 1");
+$sth->execute();
+
+my $row = $sth->fetchrow_hashref();
+
+unless ($row && $row->{telefono}) {
+    print "VERBOSE \"No hay números disponibles\" 1\n";
+    print "HANGUP\n";
+    $dbh->disconnect;
+    exit;
+}
+
+my $numero = $row->{telefono};
+
+# Asignar a variable de Asterisk
+print "SET VARIABLE llamado_num $numero\n";
+
+# Actualizar vicidial_dial_log si existe uniqueid
+if ($AGI{uniqueid}) {
+    # Intentar actualizar caller_code en vicidial_dial_log
+    # Nota: Usamos caller_code porque es la columna que usa el reporte
+    my $rows_updated = $dbh->do("UPDATE vicidial_dial_log SET caller_code = ? WHERE uniqueid = ?", undef, $numero, $AGI{uniqueid});
+    
+    # Opcional: Actualizar vicidial_log también si es necesario
+    # $dbh->do("UPDATE vicidial_log SET caller_code = ? WHERE uniqueid = ?", undef, $numero, $AGI{uniqueid});
+    
+    print "VERBOSE \"CallerID seleccionado: $numero (DialLog updated: $rows_updated)\" 1\n";
+    
+    # Fallback: Si no actualizó nada (record aun no existe), podríamos intentar loguearlo en una tabla auxiliar o esperar (pero AGI es sincrono)
+    if ($rows_updated == 0) {
+         print "VERBOSE \"Advertencia: No se encontró registro en dial_log para uniqueid $AGI{uniqueid}\" 1\n";
+    }
+}
+
+$dbh->disconnect;

@@ -1,0 +1,79 @@
+/* Reset & Base */
+.swagger-ui .wrapper { max-width: 1000px !important; padding: 60px 20px !important; font-family: 'Inter', system-ui, -apple-system, sans-serif !important; }
+.swagger-ui .info { margin-bottom: 60px !important; }
+.swagger-ui .info .title { font-size: 36px !important; color: #0f172a !important; font-weight: 800 !important; letter-spacing: -0.02em !important; }
+.swagger-ui .info .description { color: #475569 !important; font-size: 16px !important; line-height: 1.6 !important; margin-top: 10px !important; max-width: 600px !important; }
+.swagger-ui .topbar { display: none !important; }
+.swagger-ui .scheme-container { background: transparent !important; box-shadow: none !important; border: 0 !important; padding: 0 !important; margin-bottom: 40px !important; }
+
+/* Operations (Endpoints) */
+.swagger-ui .opblock { 
+  border-radius: 8px !important; 
+  border: 1px solid #e2e8f0 !important; 
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important; 
+  margin: 0 0 24px !important; 
+  background: #ffffff !important;
+  transition: all 0.2s ease !important;
+}
+.swagger-ui .opblock:hover { border-color: #cbd5e1 !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important; }
+.swagger-ui .opblock .opblock-summary { border-bottom: 0 !important; padding: 16px 24px !important; }
+
+/* Methods Badges */
+.swagger-ui .opblock-summary-method { 
+  font-weight: 700 !important; 
+  border-radius: 6px !important; 
+  min-width: 80px !important; 
+  padding: 6px 0 !important;
+  font-size: 13px !important;
+}
+
+/* Endpoint Path & Desc */
+.swagger-ui .opblock .opblock-summary-path { 
+  font-weight: 600 !important; 
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace !important; 
+  font-size: 15px !important; 
+  color: #334155 !important; 
+  margin-left: 12px !important;
+}
+.swagger-ui .opblock .opblock-summary-description { 
+  color: #64748b !important; 
+  font-size: 14px !important;
+  margin-right: 12px !important;
+}
+
+/* Minimalist Method Colors (Subtle backgrounds, strong text) */
+.swagger-ui .opblock.opblock-post { border-left: 4px solid #10b981 !important; background: #ffffff !important; }
+.swagger-ui .opblock.opblock-post .opblock-summary-method { background: #d1fae5 !important; color: #059669 !important; text-shadow: none !important; }
+
+.swagger-ui .opblock.opblock-get { border-left: 4px solid #3b82f6 !important; background: #ffffff !important; }
+.swagger-ui .opblock.opblock-get .opblock-summary-method { background: #dbeafe !important; color: #2563eb !important; text-shadow: none !important; }
+
+.swagger-ui .opblock.opblock-put { border-left: 4px solid #f59e0b !important; background: #ffffff !important; }
+.swagger-ui .opblock.opblock-put .opblock-summary-method { background: #fef3c7 !important; color: #d97706 !important; text-shadow: none !important; }
+
+.swagger-ui .opblock.opblock-delete { border-left: 4px solid #ef4444 !important; background: #ffffff !important; }
+.swagger-ui .opblock.opblock-delete .opblock-summary-method { background: #fee2e2 !important; color: #dc2626 !important; text-shadow: none !important; }
+
+/* Button Styling */
+.swagger-ui .btn.authorize { 
+  color: #ffffff !important; 
+  background-color: #0f172a !important; 
+  border-color: #0f172a !important; 
+  border-radius: 6px !important; 
+  text-transform: none !important; 
+  font-weight: 600 !important; 
+  padding: 8px 24px !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+.swagger-ui .btn.authorize svg { fill: #ffffff !important; }
+.swagger-ui .btn.execute { background-color: #3b82f6 !important; border-color: #3b82f6 !important; width: 100% !important; border-radius: 6px !important; padding: 12px 0 !important; font-weight: 600 !important; box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.4) !important; }
+
+/* Models Section */
+.swagger-ui section.models { border-radius: 8px !important; border: 1px solid #e2e8f0 !important; background: #ffffff !important; padding: 20px !important; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05) !important; }
+.swagger-ui section.models h4 { font-size: 20px !important; color: #0f172a !important; margin-bottom: 20px !important; border-bottom: 1px solid #f1f5f9 !important; padding-bottom: 10px !important; }
+.swagger-ui .model-box { width: 100% !important; }
+
+/* Layout */
+body { font-family: 'Inter', system-ui, -apple-system, sans-serif !important; background-color: #f8fafc !important; color: #334155 !important; }
+.swagger-ui input[type=text], .swagger-ui textarea { border-radius: 6px !important; border: 1px solid #cbd5e1 !important; background: #f8fafc !important; }
+.swagger-ui select { border-radius: 6px !important; border: 1px solid #cbd5e1 !important; }

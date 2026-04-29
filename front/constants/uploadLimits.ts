@@ -1,0 +1,2 @@
+export const MAX_LEAD_UPLOAD_MB = 500;
+export const MAX_LEAD_UPLOAD_BYTES = MAX_LEAD_UPLOAD_MB * 1024 * 1024;

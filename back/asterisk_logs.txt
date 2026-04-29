@@ -1,0 +1,602 @@
+[Dec 29 19:49:03] Asterisk 13.38.3-vici built by abuild @ cloud114 on a x86_64 running Linux on 2022-11-06 02:00:53 UTC
+[Dec 29 19:49:03] WARNING[27771] config.c: Unknown directive '#noload' at line 65 of /etc/asterisk/modules.conf
+[Dec 29 19:49:03] WARNING[27771] features_config.c: Parkinglots are no longer configurable in features.conf; parking is now handled by res_parking.conf
+[Dec 29 19:49:03] WARNING[27771] features_config.c: The option 'parkext' is no longer configurable in features.conf.
+[Dec 29 19:49:03] WARNING[27771] features_config.c: The option 'parkpos' is no longer configurable in features.conf.
+[Dec 29 19:49:03] WARNING[27771] features_config.c: The option 'context' is no longer configurable in features.conf.
+[Dec 29 19:49:03] NOTICE[27771] dnsmgr.c: Managed DNS entries will be refreshed every 300 seconds.
+[Dec 29 19:49:03] NOTICE[27771] cdr.c: CDR simple logging enabled.
+[Dec 29 19:49:03] WARNING[27771] config.c: Unknown directive '#noload' at line 65 of /etc/asterisk/modules.conf
+[Dec 29 19:49:03] NOTICE[27771] loader.c: 261 modules will be loaded.
+[Dec 29 19:49:04] WARNING[27771] config_options.c: Cannot update type 'opus' in module 'codec_opus' because it has no existing documentation!
+[Dec 29 19:49:04] ERROR[27771] codec_opus_config.c: Opus: failed to register sorcery object type 'opus'
+[Dec 29 19:49:04] WARNING[27771] res_phoneprov.c: Unable to find a valid server address or name.
+[Dec 29 19:49:04] NOTICE[27771] res_smdi.c: No SMDI interfaces are available to listen on, not starting SMDI listener.
+[Dec 29 19:49:04] NOTICE[27771] res_config_ldap.c: No directory user found, anonymous binding as default.
+[Dec 29 19:49:04] ERROR[27771] res_config_ldap.c: No directory URL or host found.
+[Dec 29 19:49:04] ERROR[27771] res_config_ldap.c: Cannot load LDAP RealTime driver.
+[Dec 29 19:49:04] WARNING[27771] res_musiconhold.c: Cannot open dir /var/lib/asterisk/quiet-mp3 or dir does not exist
+[Dec 29 19:49:04] NOTICE[27771] chan_sip.c: The 'username' field for sip peers has been deprecated in favor of the term 'defaultuser'
+[Dec 29 19:49:04] NOTICE[27771] chan_iax2.c: Still have a callno...
+[Dec 29 19:49:04] NOTICE[27771] chan_iax2.c: Still have a callno...
+[Dec 29 19:49:04] NOTICE[27771] chan_iax2.c: Still have a callno...
+[Dec 29 19:49:04] WARNING[27771] chan_dahdi.c: Ignoring any changes to 'userbase' (on reload) at line 23.
+[Dec 29 19:49:04] WARNING[27771] chan_dahdi.c: Ignoring any changes to 'vmsecret' (on reload) at line 31.
+[Dec 29 19:49:04] WARNING[27771] chan_dahdi.c: Ignoring any changes to 'hassip' (on reload) at line 35.
+[Dec 29 19:49:04] WARNING[27771] chan_dahdi.c: Ignoring any changes to 'hasiax' (on reload) at line 39.
+[Dec 29 19:49:04] WARNING[27771] chan_dahdi.c: Ignoring any changes to 'hasmanager' (on reload) at line 47.
+[Dec 29 19:49:04] NOTICE[27771] confbridge/conf_config_parser.c: Adding default_menu menu to app_confbridge
+[Dec 29 19:49:04] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Reachable. (142ms / 2000ms)
+[Dec 29 19:49:04] NOTICE[27771] cel_custom.c: No mappings found in cel_custom.conf. Not logging CEL to custom CSVs.
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1122${EXTEN}' at line 191 of /etc/asterisk/extensions-vicidial.conf
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1111${EXTEN}' at line 212 of /etc/asterisk/extensions-vicidial.conf
+[Dec 29 19:49:04] WARNING[27771] pbx.c: Unable to register extension '8301' priority 1 in 'default', already in use
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: Unable to register extension at line 411 of extensions.conf
+[Dec 29 19:49:04] WARNING[27771] pbx.c: Unable to register extension '8301' priority 2 in 'default', already in use
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: Unable to register extension at line 412 of extensions.conf
+[Dec 29 19:49:04] WARNING[27771] pbx.c: Unable to register extension '8301' priority 3 in 'default', already in use
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: Unable to register extension at line 413 of extensions.conf
+[Dec 29 19:49:04] WARNING[27771] pbx.c: Unable to register extension '8301' priority 4 in 'default', already in use
+[Dec 29 19:49:04] WARNING[27771] pbx_config.c: Unable to register extension at line 414 of extensions.conf
+[Dec 29 19:49:04] WARNING[27771] res_hep_pjsip.c: res_hep is not loaded or running; declining module load
+[Dec 29 19:49:04] NOTICE[27848] chan_sip.c: Peer 'sbc233' is now Reachable. (152ms / 2000ms)
+[Dec 29 19:49:04] WARNING[27771] res_hep_rtcp.c: res_hep is not loaded or running; declining module load
+[Dec 29 19:49:04] ERROR[27771] codec_dahdi.c: Failed to open /dev/dahdi/transcode: No such file or directory
+[Dec 29 19:50:10] NOTICE[27894] chan_iax2.c: Peer 'ASTblind' is now TOO LAGGED (5499 ms)!
+[Dec 29 19:50:20] NOTICE[27899] chan_iax2.c: Peer 'ASTblind' is now REACHABLE! Time: 3
+[Dec 29 21:14:12] DTMF[13507] channel.c: DTMF begin '2' received on SIP/sbc233-0000000d
+[Dec 29 21:14:12] DTMF[13507] channel.c: DTMF begin ignored '2' on SIP/sbc233-0000000d
+[Dec 29 21:15:24] DTMF[13813] channel.c: DTMF begin '1' received on SIP/sbc233-00000010
+[Dec 29 21:15:24] DTMF[13813] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000010
+[Dec 29 21:15:25] DTMF[13813] channel.c: DTMF end '1' received on SIP/sbc233-00000010, duration 400 ms
+[Dec 29 21:15:25] DTMF[13813] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000010
+[Dec 29 23:15:13] DTMF[6867] channel.c: DTMF begin '2' received on SIP/sbc233-0000001a
+[Dec 29 23:15:13] DTMF[6867] channel.c: DTMF begin ignored '2' on SIP/sbc233-0000001a
+[Dec 29 23:15:13] DTMF[6867] channel.c: DTMF end '2' received on SIP/sbc233-0000001a, duration 380 ms
+[Dec 29 23:15:13] DTMF[6867] channel.c: DTMF end passthrough '2' on SIP/sbc233-0000001a
+[Dec 29 23:15:17] DTMF[6867] channel.c: DTMF begin '2' received on SIP/sbc233-0000001a
+[Dec 29 23:15:17] DTMF[6867] channel.c: DTMF begin ignored '2' on SIP/sbc233-0000001a
+[Dec 29 23:15:17] DTMF[6867] channel.c: DTMF end '2' received on SIP/sbc233-0000001a, duration 340 ms
+[Dec 29 23:15:17] DTMF[6867] channel.c: DTMF end passthrough '2' on SIP/sbc233-0000001a
+[Dec 29 23:15:22] DTMF[6867] channel.c: DTMF begin '1' received on SIP/sbc233-0000001a
+[Dec 29 23:15:22] DTMF[6867] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000001a
+[Dec 29 23:15:22] DTMF[6867] channel.c: DTMF end '1' received on SIP/sbc233-0000001a, duration 380 ms
+[Dec 29 23:15:22] DTMF[6867] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000001a
+[Dec 29 23:20:33] DTMF[7932] channel.c: DTMF begin '2' received on SIP/sbc233-00000020
+[Dec 29 23:20:33] DTMF[7932] channel.c: DTMF begin ignored '2' on SIP/sbc233-00000020
+[Dec 29 23:24:22] DTMF[8753] channel.c: DTMF begin '2' received on SIP/sbc233-00000024
+[Dec 29 23:24:22] DTMF[8753] channel.c: DTMF begin ignored '2' on SIP/sbc233-00000024
+[Dec 29 23:24:22] DTMF[8753] channel.c: DTMF end '2' received on SIP/sbc233-00000024, duration 360 ms
+[Dec 29 23:24:22] DTMF[8753] channel.c: DTMF end passthrough '2' on SIP/sbc233-00000024
+[Dec 29 23:29:23] DTMF[9652] channel.c: DTMF begin '2' received on SIP/sbc233-0000002f
+[Dec 29 23:29:23] DTMF[9652] channel.c: DTMF begin ignored '2' on SIP/sbc233-0000002f
+[Dec 29 23:29:23] DTMF[9652] channel.c: DTMF end '2' received on SIP/sbc233-0000002f, duration 400 ms
+[Dec 29 23:29:23] DTMF[9652] channel.c: DTMF end passthrough '2' on SIP/sbc233-0000002f
+[Dec 30 10:33:03] NOTICE[27848] chan_sip.c: Failed to authenticate on INVITE to '"Anonymous" <sip:anonymous@anonymous.invalid>;tag=as3300ac2e'
+[Dec 30 10:58:16] WARNING[10253][C-00000002] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:47] WARNING[10861][C-00000068] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:48] WARNING[11013][C-00000069] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:48] WARNING[10891][C-0000006a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:48] WARNING[11205][C-0000006b] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:49] WARNING[11221][C-0000006c] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:50] WARNING[11194][C-0000006d] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:51] WARNING[11301][C-0000006e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:51] WARNING[10855][C-0000006f] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:52] WARNING[10919][C-00000070] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:53] WARNING[11082][C-00000071] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:54] WARNING[10837][C-00000072] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:55] WARNING[10899][C-00000073] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:55] WARNING[11326][C-00000074] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:00:59] WARNING[11256][C-00000076] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:00] WARNING[11171][C-00000077] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:02] WARNING[11020][C-00000078] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:03] WARNING[10916][C-00000079] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:03] WARNING[11133][C-0000007a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:30] WARNING[11666][C-0000007e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:01:55] WARNING[11838][C-0000008d] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:43] NOTICE[27848][C-0000009e] chan_sip.c: Failed to authenticate on INVITE to '"V2301102420004360185" <sip:0000000000@209.38.233.46>;tag=as1a6f4405'
+[Dec 30 11:02:49] WARNING[12599][C-000000e2] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:51] WARNING[12628][C-000000e3] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:53] WARNING[12613][C-000000e4] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:55] WARNING[12695][C-000000e5] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:56] WARNING[12644][C-000000e6] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:56] WARNING[12486][C-000000e7] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:58] WARNING[12405][C-000000e8] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:59] WARNING[12592][C-000000e9] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:59] WARNING[12447][C-000000ea] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:02:59] WARNING[12379][C-000000eb] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:00] WARNING[12782][C-000000ec] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:02] WARNING[12475][C-000000ed] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:02] WARNING[12400][C-000000ee] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:04] WARNING[12532][C-000000f1] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:07] WARNING[12726][C-000000f3] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:08] WARNING[12655][C-000000f4] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:10] WARNING[12548][C-000000f5] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:16] WARNING[13007][C-000000f7] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:48] WARNING[13157][C-00000115] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:03:54] WARNING[13277][C-00000117] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:02] WARNING[13323][C-00000118] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:39] WARNING[13564][C-0000011e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:51] WARNING[13817][C-00000160] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:55] WARNING[13675][C-00000162] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:56] WARNING[13811][C-00000163] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:04:56] WARNING[13922][C-00000164] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:09] WARNING[13779][C-00000166] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:10] WARNING[13946][C-00000168] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:12] WARNING[13688][C-00000169] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:13] WARNING[13769][C-0000016a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:17] WARNING[13751][C-0000016b] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:18] WARNING[13716][C-0000012f] app_dial.c: Unable to write frametype: 2
+[Dec 30 11:05:36] WARNING[14245][C-00000176] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:48] WARNING[14395][C-0000018e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:56] WARNING[14426][C-00000193] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:05:59] WARNING[14249][C-00000172] app_dial.c: Unable to write frametype: 2
+[Dec 30 11:05:59] WARNING[14353][C-00000194] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:06:02] WARNING[14364][C-00000195] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:06:03] WARNING[14310][C-00000196] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:06:04] WARNING[14314][C-00000197] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:22] WARNING[18277][C-00000207] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:22] WARNING[18077][C-00000208] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:23] WARNING[18388][C-00000209] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:26] WARNING[18425][C-0000020a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:27] WARNING[18222][C-0000020b] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:29] WARNING[17943][C-0000020c] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:29] WARNING[18129][C-0000020d] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:29] WARNING[18081][C-0000020e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:31] WARNING[18016][C-0000020f] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:32] WARNING[18252][C-00000210] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:33] WARNING[18401][C-00000211] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:36] WARNING[18296][C-00000212] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:36] WARNING[17934][C-00000213] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:37] WARNING[18101][C-00000214] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:39] WARNING[18326][C-00000215] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:41] WARNING[18117][C-00000216] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:41] WARNING[18293][C-00000217] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:42] WARNING[18396][C-00000218] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:43] WARNING[18200][C-00000219] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:20:56] WARNING[18696][C-0000021f] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:21:12] WARNING[18862][C-0000022a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:21:16] WARNING[18716][C-0000022e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:21:19] WARNING[18912][C-00000230] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:21:34] WARNING[18943][C-00000232] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:21:52] WARNING[18996][C-00000236] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:27] WARNING[19320][C-0000028a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:28] WARNING[19366][C-0000028b] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:30] WARNING[19497][C-0000028c] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:30] WARNING[19354][C-0000028d] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:32] WARNING[19349][C-0000028e] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:33] WARNING[19244][C-0000028f] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:33] WARNING[19653][C-00000290] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:36] WARNING[19594][C-00000291] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:37] WARNING[19556][C-00000292] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:38] WARNING[19478][C-00000293] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:38] WARNING[19334][C-00000294] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:38] WARNING[19344][C-00000295] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:39] WARNING[19437][C-00000296] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:40] WARNING[19456][C-00000297] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:42] WARNING[19569][C-0000029a] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:44] WARNING[19610][C-0000029b] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:22:47] DTMF[19777][C-00000260] channel.c: DTMF begin '1' received on SIP/sbc233-0000026e
+[Dec 30 11:22:47] DTMF[19777][C-00000260] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000026e
+[Dec 30 11:22:47] DTMF[19777][C-00000260] channel.c: DTMF end '1' received on SIP/sbc233-0000026e, duration 40 ms
+[Dec 30 11:22:47] DTMF[19777][C-00000260] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000026e
+[Dec 30 11:22:50] WARNING[19496][C-0000026c] app_dial.c: Unable to write frametype: 2
+[Dec 30 11:23:11] WARNING[19974][C-000002af] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:16] WARNING[20060][C-000002b6] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:17] WARNING[20003][C-000002b7] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:18] WARNING[19892][C-000002b8] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:19] WARNING[19859][C-000002b9] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:25] WARNING[20089][C-000002be] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:28] WARNING[20156][C-000002bf] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:30] WARNING[19977][C-000002c0] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:30] WARNING[20100][C-000002c1] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 11:23:47] WARNING[20116][C-000002c2] func_hangupcause.c: Unable to find information for channel 
+[Dec 30 15:56:10] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Lagged. (2162ms / 2000ms)
+[Dec 30 15:56:20] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Reachable. (175ms / 2000ms)
+[Dec 31 09:59:07] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Lagged. (3078ms / 2000ms)
+[Dec 31 09:59:17] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Reachable. (142ms / 2000ms)
+[Dec 31 14:35:07] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Lagged. (2424ms / 2000ms)
+[Dec 31 14:35:17] NOTICE[27848] chan_sip.c: Peer 'legaxy149' is now Reachable. (143ms / 2000ms)
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1122${EXTEN}' at line 191 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1111${EXTEN}' at line 212 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 12:37:38] WARNING[25593] pbx.c: Unable to register extension '8301' priority 1 in 'default', already in use
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: Unable to register extension at line 411 of extensions.conf
+[Jan  1 12:37:38] WARNING[25593] pbx.c: Unable to register extension '8301' priority 2 in 'default', already in use
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: Unable to register extension at line 412 of extensions.conf
+[Jan  1 12:37:38] WARNING[25593] pbx.c: Unable to register extension '8301' priority 3 in 'default', already in use
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: Unable to register extension at line 413 of extensions.conf
+[Jan  1 12:37:38] WARNING[25593] pbx.c: Unable to register extension '8301' priority 4 in 'default', already in use
+[Jan  1 12:37:38] WARNING[25593] pbx_config.c: Unable to register extension at line 414 of extensions.conf
+[Jan  1 13:02:55] WARNING[31727][C-00000327] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:02:58] WARNING[32056][C-00000328] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:02:58] WARNING[31742][C-00000329] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:02:59] WARNING[31799][C-0000032a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:02:59] WARNING[32021][C-0000032b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:02:59] WARNING[31596][C-0000032c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:00] WARNING[31581][C-0000032d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:00] WARNING[31971][C-0000032e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:00] WARNING[31662][C-0000032f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:01] WARNING[31927][C-00000330] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:01] WARNING[31636][C-00000331] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:01] WARNING[31916][C-00000332] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:02] WARNING[31591][C-00000333] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:02] WARNING[31903][C-00000336] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:02] WARNING[31723][C-00000334] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:02] WARNING[32041][C-00000335] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:02] WARNING[31959][C-00000337] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:03] WARNING[31919][C-00000339] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:03] WARNING[31748][C-0000033a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:03] WARNING[31696][C-00000338] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:03] WARNING[31738][C-0000033b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:03] DTMF[32075][C-000002e5] channel.c: DTMF begin '1' received on SIP/sbc233-000002dd
+[Jan  1 13:03:03] DTMF[32075][C-000002e5] channel.c: DTMF begin ignored '1' on SIP/sbc233-000002dd
+[Jan  1 13:03:03] DTMF[32075][C-000002e5] channel.c: DTMF end '1' received on SIP/sbc233-000002dd, duration 40 ms
+[Jan  1 13:03:03] DTMF[32075][C-000002e5] channel.c: DTMF end passthrough '1' on SIP/sbc233-000002dd
+[Jan  1 13:03:04] WARNING[31572][C-0000033c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:04] WARNING[31953][C-0000033d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:04] WARNING[31838][C-0000033e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:04] WARNING[31954][C-0000033f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:04] WARNING[31606][C-00000340] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:05] WARNING[31563][C-00000341] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:05] WARNING[31691][C-00000342] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:05] WARNING[32001][C-00000343] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:06] DTMF[32088][C-00000324] channel.c: DTMF begin '1' received on SIP/sbc233-0000031c
+[Jan  1 13:03:06] DTMF[32088][C-00000324] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000031c
+[Jan  1 13:03:06] DTMF[32088][C-00000324] channel.c: DTMF end '1' received on SIP/sbc233-0000031c, duration 40 ms
+[Jan  1 13:03:06] DTMF[32088][C-00000324] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000031c
+[Jan  1 13:03:06] WARNING[31559][C-00000344] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:06] WARNING[32029][C-00000345] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:06] WARNING[31966][C-00000346] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:07] WARNING[31794][C-00000347] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:08] WARNING[31719][C-00000348] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:09] WARNING[31623][C-00000349] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:09] WARNING[32032][C-0000034a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:09] WARNING[32007][C-0000034b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:09] WARNING[32062][C-0000034c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:11] WARNING[31677][C-0000034d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:11] WARNING[31923][C-0000034e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:13] WARNING[31871][C-0000034f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:15] WARNING[31823][C-00000350] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:17] DTMF[32454][C-000002d1] channel.c: DTMF begin '1' received on SIP/sbc233-000002c9
+[Jan  1 13:03:17] DTMF[32454][C-000002d1] channel.c: DTMF begin ignored '1' on SIP/sbc233-000002c9
+[Jan  1 13:03:17] DTMF[32454][C-000002d1] channel.c: DTMF end '1' received on SIP/sbc233-000002c9, duration 40 ms
+[Jan  1 13:03:17] DTMF[32454][C-000002d1] channel.c: DTMF end passthrough '1' on SIP/sbc233-000002c9
+[Jan  1 13:03:17] WARNING[31994][C-00000351] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:23] DTMF[32539][C-000002f7] channel.c: DTMF begin '1' received on SIP/sbc233-000002ef
+[Jan  1 13:03:23] DTMF[32539][C-000002f7] channel.c: DTMF begin ignored '1' on SIP/sbc233-000002ef
+[Jan  1 13:03:23] DTMF[32539][C-000002f7] channel.c: DTMF end '1' received on SIP/sbc233-000002ef, duration 40 ms
+[Jan  1 13:03:23] DTMF[32539][C-000002f7] channel.c: DTMF end passthrough '1' on SIP/sbc233-000002ef
+[Jan  1 13:03:44] WARNING[32620][C-00000377] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:46] WARNING[32637][C-0000037b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:46] WARNING[32736][C-0000037c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:48] WARNING[313][C-0000037f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:48] WARNING[32643][C-00000380] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:48] WARNING[32641][C-00000381] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:48] WARNING[32733][C-00000382] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:49] WARNING[32685][C-00000383] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:49] WARNING[32692][C-00000384] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:50] WARNING[32716][C-00000386] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:50] WARNING[32715][C-00000387] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:53] WARNING[32766][C-00000388] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:54] WARNING[32757][C-00000389] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:55] WARNING[32702][C-0000038a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:55] WARNING[472][C-0000038b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:56] DTMF[436][C-00000366] channel.c: DTMF begin '1' received on SIP/sbc233-00000333
+[Jan  1 13:03:56] DTMF[436][C-00000366] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000333
+[Jan  1 13:03:56] DTMF[436][C-00000366] channel.c: DTMF end '1' received on SIP/sbc233-00000333, duration 40 ms
+[Jan  1 13:03:56] DTMF[436][C-00000366] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000333
+[Jan  1 13:03:57] WARNING[350][C-0000038c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:57] WARNING[345][C-0000038d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:03:59] WARNING[334][C-0000038e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:00] WARNING[32696][C-0000038f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:00] WARNING[412][C-00000390] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:02] WARNING[32751][C-00000391] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:03] DTMF[520][C-00000385] channel.c: DTMF begin '1' received on SIP/sbc233-00000349
+[Jan  1 13:04:03] DTMF[520][C-00000385] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000349
+[Jan  1 13:04:03] DTMF[520][C-00000385] channel.c: DTMF end '1' received on SIP/sbc233-00000349, duration 40 ms
+[Jan  1 13:04:03] DTMF[520][C-00000385] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000349
+[Jan  1 13:04:05] WARNING[342][C-00000392] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:08] DTMF[565][C-00000360] channel.c: DTMF begin '1' received on SIP/sbc233-0000032d
+[Jan  1 13:04:08] DTMF[565][C-00000360] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000032d
+[Jan  1 13:04:08] DTMF[565][C-00000360] channel.c: DTMF end '1' received on SIP/sbc233-0000032d, duration 40 ms
+[Jan  1 13:04:08] DTMF[565][C-00000360] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000032d
+[Jan  1 13:04:10] DTMF[635][C-00000369] channel.c: DTMF begin '1' received on SIP/sbc233-00000336
+[Jan  1 13:04:10] DTMF[635][C-00000369] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000336
+[Jan  1 13:04:10] DTMF[635][C-00000369] channel.c: DTMF end '1' received on SIP/sbc233-00000336, duration 40 ms
+[Jan  1 13:04:10] DTMF[635][C-00000369] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000336
+[Jan  1 13:04:13] DTMF[675][C-00000374] channel.c: DTMF begin '1' received on SIP/sbc233-00000341
+[Jan  1 13:04:13] DTMF[675][C-00000374] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000341
+[Jan  1 13:04:13] DTMF[675][C-00000374] channel.c: DTMF end '1' received on SIP/sbc233-00000341, duration 40 ms
+[Jan  1 13:04:13] DTMF[675][C-00000374] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000341
+[Jan  1 13:04:28] WARNING[738][C-0000039e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:33] WARNING[740][C-000003a2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:35] WARNING[773][C-000003a4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:35] WARNING[805][C-000003a3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:35] WARNING[760][C-000003a5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:37] WARNING[725][C-000003a6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:04:41] DTMF[835][C-00000397] channel.c: DTMF begin '1' received on SIP/sbc233-0000034e
+[Jan  1 13:04:41] DTMF[835][C-00000397] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000034e
+[Jan  1 13:04:41] DTMF[835][C-00000397] channel.c: DTMF end '1' received on SIP/sbc233-0000034e, duration 40 ms
+[Jan  1 13:04:41] DTMF[835][C-00000397] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000034e
+[Jan  1 13:04:43] DTMF[846][C-0000039f] channel.c: DTMF begin '1' received on SIP/sbc233-00000355
+[Jan  1 13:04:43] DTMF[846][C-0000039f] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000355
+[Jan  1 13:04:43] DTMF[846][C-0000039f] channel.c: DTMF end '1' received on SIP/sbc233-00000355, duration 40 ms
+[Jan  1 13:04:43] DTMF[846][C-0000039f] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000355
+[Jan  1 13:04:43] DTMF[857][C-00000399] channel.c: DTMF begin '1' received on SIP/sbc233-00000350
+[Jan  1 13:04:43] DTMF[857][C-00000399] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000350
+[Jan  1 13:04:43] DTMF[857][C-00000399] channel.c: DTMF end '1' received on SIP/sbc233-00000350, duration 40 ms
+[Jan  1 13:04:43] DTMF[857][C-00000399] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000350
+[Jan  1 13:07:11] WARNING[1774][C-0000040b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:12] WARNING[1705][C-0000040c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:13] WARNING[1758][C-0000040d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:13] WARNING[2155][C-0000040e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:14] WARNING[1542][C-0000040f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:14] WARNING[1604][C-00000410] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:14] WARNING[2123][C-00000411] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:15] WARNING[1553][C-00000412] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:15] WARNING[2114][C-00000413] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:15] WARNING[1667][C-00000414] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:15] WARNING[1520][C-00000415] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:15] WARNING[1513][C-00000416] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:16] WARNING[1643][C-00000417] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:16] WARNING[2034][C-00000419] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:16] WARNING[2026][C-00000418] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:16] WARNING[1650][C-0000041b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:16] WARNING[2075][C-0000041a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:17] WARNING[1625][C-0000041c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:18] WARNING[1598][C-0000041d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:18] WARNING[1559][C-0000041e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:18] WARNING[1753][C-0000041f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[2140][C-00000420] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[2456][C-00000421] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[1676][C-00000422] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[1567][C-00000423] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[1907][C-00000424] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[1823][C-00000425] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:19] WARNING[2080][C-00000426] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:20] WARNING[1734][C-00000427] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:20] WARNING[1525][C-00000428] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:20] WARNING[2236][C-00000429] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:20] WARNING[1640][C-0000042a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:20] WARNING[2462][C-0000042b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:21] WARNING[2435][C-0000042c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:21] DTMF[2506][C-000003af] channel.c: DTMF begin '1' received on SIP/sbc233-00000360
+[Jan  1 13:07:21] DTMF[2506][C-000003af] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000360
+[Jan  1 13:07:21] DTMF[2506][C-000003af] channel.c: DTMF end '1' received on SIP/sbc233-00000360, duration 40 ms
+[Jan  1 13:07:21] DTMF[2506][C-000003af] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000360
+[Jan  1 13:07:21] WARNING[1727][C-0000042d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:21] WARNING[2106][C-0000042e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:22] WARNING[2136][C-0000042f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:23] DTMF[2542][C-000003c8] channel.c: DTMF begin '1' received on SIP/sbc233-00000379
+[Jan  1 13:07:23] DTMF[2542][C-000003c8] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000379
+[Jan  1 13:07:23] DTMF[2542][C-000003c8] channel.c: DTMF end '1' received on SIP/sbc233-00000379, duration 40 ms
+[Jan  1 13:07:23] DTMF[2542][C-000003c8] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000379
+[Jan  1 13:07:26] WARNING[2459][C-00000430] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:27] DTMF[2639][C-00000407] channel.c: DTMF begin '1' received on SIP/sbc233-000003b8
+[Jan  1 13:07:27] DTMF[2639][C-00000407] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003b8
+[Jan  1 13:07:27] DTMF[2639][C-00000407] channel.c: DTMF end '1' received on SIP/sbc233-000003b8, duration 40 ms
+[Jan  1 13:07:27] DTMF[2639][C-00000407] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003b8
+[Jan  1 13:07:28] WARNING[2448][C-00000431] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:07:29] DTMF[2718][C-00000404] channel.c: DTMF begin '1' received on SIP/sbc233-000003b5
+[Jan  1 13:07:29] DTMF[2718][C-00000404] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003b5
+[Jan  1 13:07:29] DTMF[2718][C-00000404] channel.c: DTMF end '1' received on SIP/sbc233-000003b5, duration 40 ms
+[Jan  1 13:07:29] DTMF[2718][C-00000404] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003b5
+[Jan  1 13:07:29] DTMF[2725][C-000003d3] channel.c: DTMF begin '1' received on SIP/sbc233-00000384
+[Jan  1 13:07:29] DTMF[2725][C-000003d3] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000384
+[Jan  1 13:07:29] DTMF[2725][C-000003d3] channel.c: DTMF end '1' received on SIP/sbc233-00000384, duration 40 ms
+[Jan  1 13:07:29] DTMF[2725][C-000003d3] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000384
+[Jan  1 13:07:30] DTMF[2743][C-000003f8] channel.c: DTMF begin '1' received on SIP/sbc233-000003a9
+[Jan  1 13:07:30] DTMF[2743][C-000003f8] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003a9
+[Jan  1 13:07:30] DTMF[2743][C-000003f8] channel.c: DTMF end '1' received on SIP/sbc233-000003a9, duration 40 ms
+[Jan  1 13:07:30] DTMF[2743][C-000003f8] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003a9
+[Jan  1 13:07:33] DTMF[2774][C-00000409] channel.c: DTMF begin '1' received on SIP/sbc233-000003ba
+[Jan  1 13:07:33] DTMF[2774][C-00000409] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003ba
+[Jan  1 13:07:33] DTMF[2774][C-00000409] channel.c: DTMF end '1' received on SIP/sbc233-000003ba, duration 40 ms
+[Jan  1 13:07:33] DTMF[2774][C-00000409] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003ba
+[Jan  1 13:07:36] DTMF[2784][C-00000406] channel.c: DTMF begin '1' received on SIP/sbc233-000003b7
+[Jan  1 13:07:36] DTMF[2784][C-00000406] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003b7
+[Jan  1 13:07:36] DTMF[2784][C-00000406] channel.c: DTMF end '1' received on SIP/sbc233-000003b7, duration 40 ms
+[Jan  1 13:07:36] DTMF[2784][C-00000406] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003b7
+[Jan  1 13:50:56] WARNING[12559][C-00000496] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:50:57] WARNING[12605][C-00000497] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:00] WARNING[12587][C-00000498] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:01] WARNING[12760][C-00000499] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:01] WARNING[12683][C-0000049a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:01] WARNING[13026][C-0000049b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:01] WARNING[13058][C-0000049c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:02] WARNING[12775][C-0000049d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:02] WARNING[12873][C-0000049e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:03] WARNING[12792][C-0000049f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:03] WARNING[12867][C-000004a0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:03] WARNING[12562][C-000004a1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:03] WARNING[12902][C-000004a2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] WARNING[12735][C-000004a3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] WARNING[12918][C-000004a4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] WARNING[12955][C-000004a5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] WARNING[12786][C-000004a6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] DTMF[13072][C-00000432] channel.c: DTMF begin '1' received on SIP/sbc233-000003bc
+[Jan  1 13:51:04] DTMF[13072][C-00000432] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003bc
+[Jan  1 13:51:04] WARNING[12835][C-000004a7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:04] DTMF[13072][C-00000432] channel.c: DTMF end '1' received on SIP/sbc233-000003bc, duration 40 ms
+[Jan  1 13:51:04] DTMF[13072][C-00000432] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003bc
+[Jan  1 13:51:04] WARNING[13048][C-000004a8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:05] WARNING[13068][C-000004a9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:05] WARNING[13060][C-000004aa] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:05] WARNING[12804][C-000004ab] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:05] WARNING[12638][C-000004ac] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:05] DTMF[13081][C-0000043a] channel.c: DTMF begin '1' received on SIP/sbc233-000003c4
+[Jan  1 13:51:05] DTMF[13081][C-0000043a] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003c4
+[Jan  1 13:51:06] DTMF[13081][C-0000043a] channel.c: DTMF end '1' received on SIP/sbc233-000003c4, duration 40 ms
+[Jan  1 13:51:06] DTMF[13081][C-0000043a] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003c4
+[Jan  1 13:51:06] WARNING[13021][C-000004ad] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:06] WARNING[12692][C-000004ae] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:06] WARNING[12789][C-000004af] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:06] WARNING[12609][C-000004b0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:06] WARNING[12899][C-000004b1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:07] WARNING[12699][C-000004b2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:07] WARNING[12977][C-000004b3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:07] WARNING[13038][C-000004b4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:07] WARNING[12816][C-000004b5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:08] WARNING[12655][C-000004b6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:08] WARNING[12840][C-000004b7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:08] WARNING[12726][C-000004b8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:08] WARNING[12927][C-000004b9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:08] WARNING[12821][C-000004ba] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:09] DTMF[13113][C-0000048c] channel.c: DTMF begin '1' received on SIP/sbc233-00000416
+[Jan  1 13:51:09] DTMF[13113][C-0000048c] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000416
+[Jan  1 13:51:09] DTMF[13113][C-0000048c] channel.c: DTMF end '1' received on SIP/sbc233-00000416, duration 40 ms
+[Jan  1 13:51:09] DTMF[13113][C-0000048c] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000416
+[Jan  1 13:51:09] WARNING[12916][C-000004bb] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:09] DTMF[13123][C-00000493] channel.c: DTMF begin '1' received on SIP/sbc233-0000041d
+[Jan  1 13:51:09] DTMF[13123][C-00000493] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000041d
+[Jan  1 13:51:09] DTMF[13123][C-00000493] channel.c: DTMF end '1' received on SIP/sbc233-0000041d, duration 40 ms
+[Jan  1 13:51:09] DTMF[13123][C-00000493] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000041d
+[Jan  1 13:51:09] WARNING[12890][C-000004bc] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:09] WARNING[12952][C-000004bd] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:09] WARNING[12765][C-000004be] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:10] WARNING[12959][C-000004bf] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:10] WARNING[13035][C-000004c0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:11] WARNING[12857][C-000004c1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:13] DTMF[13289][C-00000492] channel.c: DTMF begin '1' received on SIP/sbc233-0000041c
+[Jan  1 13:51:13] DTMF[13289][C-00000492] channel.c: DTMF begin ignored '1' on SIP/sbc233-0000041c
+[Jan  1 13:51:13] DTMF[13289][C-00000492] channel.c: DTMF end '1' received on SIP/sbc233-0000041c, duration 40 ms
+[Jan  1 13:51:13] DTMF[13289][C-00000492] channel.c: DTMF end passthrough '1' on SIP/sbc233-0000041c
+[Jan  1 13:51:13] WARNING[12801][C-000004c2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:14] WARNING[12622][C-000004c3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:14] DTMF[13317][C-0000048a] channel.c: DTMF begin '1' received on SIP/sbc233-00000414
+[Jan  1 13:51:14] DTMF[13317][C-0000048a] channel.c: DTMF begin ignored '1' on SIP/sbc233-00000414
+[Jan  1 13:51:14] DTMF[13317][C-0000048a] channel.c: DTMF end '1' received on SIP/sbc233-00000414, duration 40 ms
+[Jan  1 13:51:14] DTMF[13317][C-0000048a] channel.c: DTMF end passthrough '1' on SIP/sbc233-00000414
+[Jan  1 13:51:15] WARNING[12584][C-000004c4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 13:51:16] DTMF[13385][C-00000468] channel.c: DTMF begin '1' received on SIP/sbc233-000003f2
+[Jan  1 13:51:16] DTMF[13385][C-00000468] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003f2
+[Jan  1 13:51:16] DTMF[13385][C-00000468] channel.c: DTMF end '1' received on SIP/sbc233-000003f2, duration 40 ms
+[Jan  1 13:51:16] DTMF[13385][C-00000468] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003f2
+[Jan  1 13:51:19] DTMF[13492][C-0000046b] channel.c: DTMF begin '1' received on SIP/sbc233-000003f5
+[Jan  1 13:51:19] DTMF[13492][C-0000046b] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003f5
+[Jan  1 13:51:19] DTMF[13492][C-0000046b] channel.c: DTMF end '1' received on SIP/sbc233-000003f5, duration 40 ms
+[Jan  1 13:51:19] DTMF[13492][C-0000046b] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003f5
+[Jan  1 13:51:23] DTMF[13534][C-00000436] channel.c: DTMF begin '1' received on SIP/sbc233-000003c0
+[Jan  1 13:51:23] DTMF[13534][C-00000436] channel.c: DTMF begin ignored '1' on SIP/sbc233-000003c0
+[Jan  1 13:51:23] DTMF[13534][C-00000436] channel.c: DTMF end '1' received on SIP/sbc233-000003c0, duration 40 ms
+[Jan  1 13:51:23] DTMF[13534][C-00000436] channel.c: DTMF end passthrough '1' on SIP/sbc233-000003c0
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1122${EXTEN}' at line 191 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1111${EXTEN}' at line 217 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 13:59:05] WARNING[15409] pbx.c: Unable to register extension '8301' priority 1 in 'default', already in use
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: Unable to register extension at line 411 of extensions.conf
+[Jan  1 13:59:05] WARNING[15409] pbx.c: Unable to register extension '8301' priority 2 in 'default', already in use
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: Unable to register extension at line 412 of extensions.conf
+[Jan  1 13:59:05] WARNING[15409] pbx.c: Unable to register extension '8301' priority 3 in 'default', already in use
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: Unable to register extension at line 413 of extensions.conf
+[Jan  1 13:59:05] WARNING[15409] pbx.c: Unable to register extension '8301' priority 4 in 'default', already in use
+[Jan  1 13:59:05] WARNING[15409] pbx_config.c: Unable to register extension at line 414 of extensions.conf
+[Jan  1 14:03:08] WARNING[16209][C-000004c5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:32:32] WARNING[22949][C-000004c6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:34:34] WARNING[23415][C-000004c7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:36:37] WARNING[23885][C-000004c8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:38:40] WARNING[24345][C-000004c9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:40:44] WARNING[24807][C-000004ca] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:42:46] WARNING[25271][C-000004cb] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:44:52] WARNING[25736][C-000004cc] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:46:54] WARNING[26220][C-000004cd] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:49:00] WARNING[26693][C-000004ce] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:51:03] WARNING[27151][C-000004cf] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:53:05] WARNING[27614][C-000004d0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:55:10] WARNING[28236][C-000004d1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:57:16] WARNING[28696][C-000004d2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 14:59:21] WARNING[29175][C-000004d3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:01:26] WARNING[29658][C-000004d4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:03:29] WARNING[30149][C-000004d5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:05:35] WARNING[30686][C-000004d6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:07:40] WARNING[31158][C-000004d7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:09:46] WARNING[31629][C-000004d8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:11:48] WARNING[32089][C-000004d9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:13:51] WARNING[32649][C-000004da] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:15:57] WARNING[675][C-000004db] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:18:00] WARNING[1161][C-000004dc] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:20:02] WARNING[1627][C-000004dd] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:22:08] WARNING[2558][C-000004de] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:24:13] WARNING[3026][C-000004df] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:26:16] WARNING[3490][C-000004e0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:28:18] WARNING[3964][C-000004e1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:30:24] WARNING[4437][C-000004e2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:32:27] WARNING[4927][C-000004e3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:34:29] WARNING[5385][C-000004e4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:36:32] WARNING[5912][C-000004e5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:38:38] WARNING[6384][C-000004e6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:40:43] WARNING[6894][C-000004e7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:42:49] WARNING[7365][C-000004e8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:44:51] WARNING[7824][C-000004e9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:46:57] WARNING[8329][C-000004ea] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:48:59] WARNING[8789][C-000004eb] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:51:02] WARNING[9247][C-000004ec] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:53:08] WARNING[9722][C-000004ed] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:55:10] WARNING[10182][C-000004ee] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:57:16] WARNING[10645][C-000004ef] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 15:59:18] WARNING[11118][C-000004f0] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:01:21] WARNING[11600][C-000004f1] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:03:07] WARNING[12019][C-000004f2] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:03:07] WARNING[12024][C-000004f3] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:03:07] WARNING[12033][C-000004f4] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:03:07] WARNING[12035][C-000004f5] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:03:25] WARNING[12084][C-000004f6] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:05:10] WARNING[12513][C-000004f7] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:05:10] WARNING[12519][C-000004f8] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:05:10] WARNING[12523][C-000004f9] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:05:10] WARNING[12527][C-000004fa] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:05:28] WARNING[12575][C-000004fb] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:07:14] WARNING[12993][C-000004fc] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:07:14] WARNING[12998][C-000004fd] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:07:14] WARNING[13002][C-000004fe] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:07:14] WARNING[13008][C-000004ff] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:07:32] WARNING[13126][C-00000500] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:09:17] WARNING[13477][C-00000501] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:09:17] WARNING[13488][C-00000502] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:09:17] WARNING[13490][C-00000503] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:09:17] WARNING[13495][C-00000504] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:09:37] WARNING[13621][C-00000505] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1122${EXTEN}' at line 191 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1111${EXTEN}' at line 217 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 16:10:19] WARNING[13918] pbx.c: Unable to register extension '8301' priority 1 in 'default', already in use
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: Unable to register extension at line 411 of extensions.conf
+[Jan  1 16:10:19] WARNING[13918] pbx.c: Unable to register extension '8301' priority 2 in 'default', already in use
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: Unable to register extension at line 412 of extensions.conf
+[Jan  1 16:10:19] WARNING[13918] pbx.c: Unable to register extension '8301' priority 3 in 'default', already in use
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: Unable to register extension at line 413 of extensions.conf
+[Jan  1 16:10:19] WARNING[13918] pbx.c: Unable to register extension '8301' priority 4 in 'default', already in use
+[Jan  1 16:10:19] WARNING[13918] pbx_config.c: Unable to register extension at line 414 of extensions.conf
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1122${EXTEN}' at line 191 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: No closing parenthesis found? 'Dial(SIP/sbc233/1111${EXTEN}' at line 217 of /etc/asterisk/extensions-vicidial.conf
+[Jan  1 16:11:21] WARNING[14206] pbx.c: Unable to register extension '8301' priority 1 in 'default', already in use
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: Unable to register extension at line 411 of extensions.conf
+[Jan  1 16:11:21] WARNING[14206] pbx.c: Unable to register extension '8301' priority 2 in 'default', already in use
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: Unable to register extension at line 412 of extensions.conf
+[Jan  1 16:11:21] WARNING[14206] pbx.c: Unable to register extension '8301' priority 3 in 'default', already in use
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: Unable to register extension at line 413 of extensions.conf
+[Jan  1 16:11:21] WARNING[14206] pbx.c: Unable to register extension '8301' priority 4 in 'default', already in use
+[Jan  1 16:11:21] WARNING[14206] pbx_config.c: Unable to register extension at line 414 of extensions.conf
+[Jan  1 16:11:22] WARNING[14014][C-00000506] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:11:22] WARNING[14018][C-00000507] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:11:22] WARNING[14022][C-00000508] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:11:22] WARNING[14026][C-00000509] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:11:43] WARNING[14151][C-0000050a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14498][C-0000050b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14504][C-0000050d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14507][C-0000050c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14509][C-0000050e] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14517][C-0000050f] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14521][C-00000510] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14527][C-00000511] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14535][C-00000512] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14544][C-00000513] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14549][C-00000514] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14557][C-00000515] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14560][C-00000516] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14566][C-00000517] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14568][C-00000518] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:10] WARNING[14573][C-00000519] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:28] WARNING[14617][C-0000051a] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:28] WARNING[14632][C-0000051b] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:28] WARNING[14635][C-0000051c] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:28] WARNING[14638][C-0000051d] func_hangupcause.c: Unable to find information for channel 
+[Jan  1 16:13:49] WARNING[14767][C-0000051e] func_hangupcause.c: Unable to find information for channel 

@@ -1,0 +1,976 @@
+class ApiService {
+  private getApiUrl(): string {
+    let source = 'default';
+    let url = 'https://urlpro.cc/api';
+
+    // Try to get from saved settings first
+    try {
+      const savedSettings = localStorage.getItem('systemSettings');
+      if (savedSettings) {
+        const settings = JSON.parse(savedSettings);
+        if (settings.apiUrl) {
+          url = settings.apiUrl;
+          source = 'settings';
+        }
+      }
+    } catch (error) {
+      console.error('[API] Error loading settings:', error);
+    }
+
+    // Fallback to environment variable or default
+    try {
+      if (source === 'default' && typeof window !== 'undefined' && (window as any).VITE_API_URL) {
+        url = (window as any).VITE_API_URL;
+        source = 'env';
+      }
+    } catch { }
+
+    return url;
+  }
+
+  private async request(endpoint: string, options: RequestInit = {}) {
+    const url = `${this.getApiUrl()}${endpoint}`;
+
+    let authHeaders: Record<string, string> = {};
+    try {
+      const authStr = localStorage.getItem('auth-storage');
+      if (authStr) {
+        const authData = JSON.parse(authStr);
+        const token = authData?.state?.session?.token;
+        const userGroup = authData?.state?.session?.user?.group;
+        const userName = authData?.state?.session?.user?.id || authData?.state?.session?.user?.name;
+
+        // JWT Bearer token (primary authentication)
+        if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+        // Legacy headers (backward compatibility)
+        if (userGroup) authHeaders['X-User-Role'] = userGroup;
+        if (userName) authHeaders['X-User-Name'] = userName;
+      }
+    } catch (e) {
+      console.error('[API] Failed to parse auth storage for headers');
+    }
+
+    const defaultOptions: RequestInit = {
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders
+      },
+      ...options,
+    };
+
+    try {
+      const response = await fetch(url, defaultOptions);
+      const contentType = response.headers.get('content-type');
+
+      // Handle 401 — token expired or invalid
+      if (response.status === 401) {
+        console.warn('[API] Unauthorized — session expired');
+        localStorage.removeItem('auth-storage');
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        throw new Error('Session expired. Please login again.');
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Request failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error(`[API] Error ${options.method || 'GET'} ${endpoint}:`, error);
+      throw error;
+    }
+  }
+
+  // Lists
+  async getLists() {
+    // Note: This would need a backend endpoint to list all lists
+    // For now, we'll use campaigns to get associated lists
+    return this.request('/campaigns');
+  }
+
+  async getList(listId: string) {
+    return this.request(`/lists/${listId}`);
+  }
+
+  async createList(listData: any) {
+    return this.request('/lists', {
+      method: 'POST',
+      body: JSON.stringify(listData),
+    });
+  }
+
+  async updateList(listId: string, updates: any) {
+    return this.request(`/lists/${listId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteList(listId: string, deleteLeads = false) {
+    return this.request(`/lists/${listId}?delete_leads=${deleteLeads}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getListLeads(listId: string, limit = 100, offset = 0) {
+    return this.request(`/lists/${listId}/leads?limit=${limit}&offset=${offset}`);
+  }
+
+  async getNextListId() {
+    return this.request('/lists/next-id');
+  }
+
+  async getStatusCounts(listId: string) {
+    return this.request(`/lists/${listId}/status-counts`);
+  }
+
+  async recycleList(listId: string, statuses: string[]) {
+    return this.request(`/lists/${listId}/recycle`, {
+      method: 'POST',
+      body: JSON.stringify({ statuses }),
+    });
+  }
+
+  // File-based lead upload (streaming, low memory)
+  async uploadLeadsFile(listId: string, file: File, campaignId?: string): Promise<{ success: boolean; taskId: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (campaignId) formData.append('campaign_id', campaignId);
+
+    const apiUrl = this.getApiUrl();
+    const token = (() => {
+      try {
+        const authStr = localStorage.getItem('auth-storage');
+        if (authStr) return JSON.parse(authStr)?.state?.session?.token;
+      } catch { }
+      return null;
+    })();
+
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${apiUrl}/lists/${listId}/upload-file`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al subir archivo');
+    }
+
+    return response.json();
+  }
+
+  // Leads
+  async searchLeads(phoneNumber: string, records = 1000) {
+    return this.request(`/leads/search?phone_number=${phoneNumber}&records=${records}`);
+  }
+
+  async getLead(leadId: string, customFields = false) {
+    return this.request(`/leads/${leadId}?custom_fields=${customFields ? 'Y' : 'N'}`);
+  }
+
+  async createLead(leadData: any) {
+    return this.request('/leads', {
+      method: 'POST',
+      body: JSON.stringify(leadData),
+    });
+  }
+
+  async updateLead(leadId: string, updates: any) {
+    return this.request(`/leads/${leadId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteLead(leadId: string) {
+    return this.request(`/leads/${leadId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Campaigns
+  async getCampaignPrefixes() {
+    return this.request('/campaigns/prefixes');
+  }
+
+  async createCampaign(data: { campaign_id?: string; campaign_name: string; dial_prefix?: string; auto_dial_level?: number | string; max_retries?: number | string; campaign_cid?: string }) {
+    return this.request('/campaigns/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getCampaigns(params: {
+    campaignId?: string;
+    allowedCampaigns?: string[];
+  } = {}) {
+    const { campaignId, allowedCampaigns } = params;
+    const searchParams = new URLSearchParams();
+
+    if (campaignId) {
+      searchParams.append('campaign_id', campaignId);
+    }
+
+    if (allowedCampaigns && allowedCampaigns.length > 0) {
+      searchParams.append('allowed_campaigns', allowedCampaigns.join(','));
+    }
+
+    const queryString = searchParams.toString();
+    const url = queryString ? `/campaigns?${queryString}` : '/campaigns';
+
+    return this.request(url);
+  }
+
+  async getCampaignStats(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/stats`);
+  }
+
+  async getCampaignHopper(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/hopper`);
+  }
+
+  async getCampaignProgress(campaignId: string, limit = 1000) {
+    return this.request(`/campaigns/${campaignId}/progress`, {
+      method: 'POST',
+      body: JSON.stringify({ limit }),
+    });
+  }
+
+  async updateListStatus(listId: string, active: 'Y' | 'N'): Promise<{ success: boolean; message?: string }> {
+    return this.request(`/lists/${listId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ active }),
+    });
+  }
+
+  async getCampaignLists(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/lists`);
+  }
+
+  async getCampaignDialLog(campaignId: string, startDatetime: string, endDatetime: string, limit = 500000) {
+    return this.request(`/campaigns/${campaignId}/dial-log`, {
+      method: 'POST',
+      body: JSON.stringify({ startDatetime, endDatetime, limit }),
+    });
+  }
+
+  // NEW: Call log from gescall_call_log table (correct pool CallerID)
+  async getCampaignCallLog(campaignId: string, startDatetime: string, endDatetime: string, limit = 500000) {
+    return this.request(`/campaigns/${campaignId}/call-log`, {
+      method: 'POST',
+      body: JSON.stringify({ startDatetime, endDatetime, limit }),
+    });
+  }
+
+  // Consolidated report across multiple campaigns
+  async getConsolidatedReport(campaigns: string[], startDatetime: string, endDatetime: string, limit = 500000) {
+    return this.request('/campaigns/consolidated', {
+      method: 'POST',
+      body: JSON.stringify({ campaigns, startDatetime, endDatetime, limit }),
+    });
+  }
+
+  async getCampaignCallerIdSettings(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/callerid-settings`);
+  }
+
+  async updateCampaignCallerIdSettings(campaignId: string, data: {
+    rotation_mode: string;
+    pool_id?: number | null;
+    match_mode?: string;
+    fixed_area_code?: string | null;
+    fallback_callerid?: string | null;
+    selection_strategy?: string;
+    match_area_code?: boolean;
+  }) {
+    return this.request(`/campaigns/${campaignId}/callerid-settings`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async startCampaign(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/start`, {
+      method: 'POST',
+    });
+  }
+
+  async stopCampaign(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/stop`, {
+      method: 'POST',
+    });
+  }
+
+  async archiveCampaign(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async unarchiveCampaign(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/unarchive`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteCampaign(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async updateCampaignDialLevel(campaignId: string, level: string | number) {
+    return this.request(`/campaigns/${campaignId}/dial-level`, {
+      method: 'PUT',
+      body: JSON.stringify({ level: String(level) }),
+    });
+  }
+
+  async updateCampaignRetries(campaignId: string, maxRetries: number) {
+    return this.request(`/campaigns/${campaignId}/retries`, {
+      method: 'PUT',
+      body: JSON.stringify({ maxRetries }),
+    });
+  }
+
+  async updateCampaignAltPhone(campaignId: string, enabled: boolean) {
+    return this.request(`/campaigns/${campaignId}/alt-phone`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  async updateCampaignRetrySettings(campaignId: string, retrySettings: Record<string, number>) {
+    return this.request(`/campaigns/${campaignId}/retry-settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ retry_settings: retrySettings }),
+    });
+  }
+
+  async updateCampaignStructure(campaignId: string, schema: any[]) {
+    return this.request(`/campaigns/${campaignId}/structure`, {
+      method: 'PUT',
+      body: JSON.stringify({ schema }),
+    });
+  }
+  async getTTSTemplates() {
+    // The backend endpoint for tts/templates is not yet implemented in the DB.
+    // Return empty array gracefully to avoid 404 console errors.
+    return { success: true, data: [] };
+  }
+
+  async updateCampaignTTSTemplates(campaignId: string, templates: any[]) {
+    return this.request(`/campaigns/${campaignId}/tts_templates`, {
+      method: 'PUT',
+      body: JSON.stringify({ templates }),
+    });
+  }
+
+  async getCpsAvailability() {
+    return this.request('/campaigns/cps-availability');
+  }
+
+  async getCampaignsSummary(campaigns?: string[]) {
+    return this.request('/campaigns/summary', {
+      method: 'POST',
+      body: JSON.stringify({ campaigns }),
+    });
+  }
+
+  // Dashboard data endpoints (replacement for Vicibroker)
+  async getBulkCampaignsStatus(campaigns?: string[]) {
+    // Para entornos PG, los endpoints /bulk pueden no estar disponibles.
+    // Simulamos el comportamiento llamando a los endpoints individuales y uniendo las respuestas.
+    if (!campaigns || campaigns.length === 0) {
+      return { success: true, data: [] };
+    }
+
+    try {
+      const results = await Promise.all(
+        campaigns.map((campId) => this.request(`/campaigns/${campId}/stats`).catch(() => null))
+      );
+
+      const validData = results
+        .filter((res) => res && res.success && res.data)
+        .map((res) => ({
+          campaign_id: res.data.campaign_id,
+          campaign_name: res.data.campaign_name,
+          estado: res.data.active === 'Y' ? 'Activa' : 'Inactiva',
+          active: res.data.active,
+        }));
+
+      return { success: true, data: validData };
+    } catch (error) {
+      console.error('[API] Error in getBulkCampaignsStatus:', error);
+      throw error;
+    }
+  }
+
+  async getBulkListsCount(campaigns: string[]) {
+    if (!campaigns || campaigns.length === 0) {
+      return { success: true, data: [] };
+    }
+
+    try {
+      const results = await Promise.all(
+        campaigns.map((campId) => this.request(`/campaigns/${campId}/lists`).catch(() => null))
+      );
+
+      const validData = results
+        .filter((res) => res && res.success && res.data)
+        .map((res, index) => ({
+          campaign_id: campaigns[index],
+          cantidad_listas: Array.isArray(res.data) ? res.data.length : 0,
+        }));
+
+      return { success: true, data: validData };
+    } catch (error) {
+      console.error('[API] Error in getBulkListsCount:', error);
+      throw error;
+    }
+  }
+
+  // Agents
+  async getLoggedInAgents(campaigns?: string, userGroups?: string) {
+    const params = new URLSearchParams();
+    if (campaigns) params.append('campaigns', campaigns);
+    if (userGroups) params.append('user_groups', userGroups);
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/agents/logged-in${query}`);
+  }
+
+  async getAgentStatus(agentUser: string) {
+    return this.request(`/agents/${agentUser}/status`);
+  }
+
+  // Health check
+  async healthCheck() {
+    // Health endpoint is on root, not /api
+    const apiUrl = this.getApiUrl();
+    const baseUrl = apiUrl.replace('/api', '');
+    const response = await fetch(`${baseUrl}/health`);
+    return response.json();
+  }
+
+  // Audio management
+  async getAudioFiles() {
+    return this.request('/audio');
+  }
+
+  async uploadAudio(file: File, campaign: string, isNodeUpload: boolean = false) {
+    const formData = new FormData();
+    formData.append('audio', file);
+    formData.append('campaign', campaign);
+    if (isNodeUpload) {
+      formData.append('isNodeUpload', 'true');
+    }
+
+    const apiUrl = this.getApiUrl();
+    const token = localStorage.getItem('auth-storage') ? JSON.parse(localStorage.getItem('auth-storage')!).state?.session?.token : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${apiUrl}/audio/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al subir archivo');
+    }
+
+    return response.json();
+  }
+
+  async deleteAudio(filename: string) {
+    return this.request(`/audio/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Blacklist / DNC
+  async getDncList(limit = 100, page = 1, search = '', campaignId?: string) {
+    let url = `/dnc?limit=${limit}&page=${page}&search=${search}`;
+    if (campaignId) url += `&campaign_id=${campaignId}`;
+    return this.request(url);
+  }
+
+  async addDncNumber(phoneNumber: string, campaignId?: string) {
+    return this.request('/dnc', {
+      method: 'POST',
+      body: JSON.stringify({ phoneNumber, campaign_id: campaignId || undefined }),
+    });
+  }
+
+  async removeDncNumber(phoneNumber: string, campaignId?: string) {
+    let url = `/dnc/${phoneNumber}`;
+    if (campaignId) url += `?campaign_id=${campaignId}`;
+    return this.request(url, {
+      method: 'DELETE',
+    });
+  }
+
+  async clearAllDncNumbers(campaignId?: string) {
+    let url = '/dnc/all';
+    if (campaignId) url += `?campaign_id=${campaignId}`;
+    return this.request(url, {
+      method: 'DELETE',
+    });
+  }
+
+  async uploadDncFile(file: File, campaignId?: string) {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (campaignId) formData.append('campaign_id', campaignId);
+
+    const apiUrl = this.getApiUrl();
+    const response = await fetch(`${apiUrl}/dnc/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al subir archivo');
+    }
+
+    return response.json();
+  }
+
+  // DNC Smart Rules
+  async getDncRules() {
+    return this.request('/dnc/rules');
+  }
+
+  async createDncRule(data: { name: string; country_code: string; max_calls: number; period_hours: number; applies_to?: string }) {
+    return this.request('/dnc/rules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDncRule(id: number, data: { name?: string; country_code?: string; max_calls?: number; period_hours?: number; is_active?: boolean; applies_to?: string }) {
+    return this.request(`/dnc/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDncRule(id: number) {
+    return this.request(`/dnc/rules/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getAudioInfo(filename: string) {
+    return this.request(`/audio/${encodeURIComponent(filename)}/info`);
+  }
+  getAudioStreamUrl(filename: string): string {
+    return `${this.getApiUrl()}/audio/${filename}/stream`;
+  }
+
+
+  // CallerID Pools API
+  async getCallerIdPools(limit = 50, page = 1, search = '') {
+    return this.request(`/callerid-pools?limit=${limit}&page=${page}&search=${search}`);
+  }
+
+  async getCallerIdPool(id: number) {
+    return this.request(`/callerid-pools/${id}`);
+  }
+
+  async createCallerIdPool(name: string, description?: string, country_code?: string) {
+    return this.request('/callerid-pools', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, country_code }),
+    });
+  }
+
+  async updateCallerIdPool(id: number, data: { name?: string; description?: string; country_code?: string; is_active?: boolean }) {
+    return this.request(`/callerid-pools/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCallerIdPool(id: number) {
+    return this.request(`/callerid-pools/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getPoolNumbers(poolId: number, limit = 100, page = 1, search = '') {
+    return this.request(`/callerid-pools/${poolId}/numbers?limit=${limit}&page=${page}&search=${search}`);
+  }
+
+  async getPoolAreaCodes(poolId: number) {
+    return this.request(`/callerid-pools/${poolId}/area-codes`);
+  }
+
+  async addPoolNumber(poolId: number, callerid: string) {
+    return this.request(`/callerid-pools/${poolId}/numbers`, {
+      method: 'POST',
+      body: JSON.stringify({ callerid }),
+    });
+  }
+
+  async importPoolNumbers(poolId: number, numbers: string) {
+    return this.request(`/callerid-pools/${poolId}/import`, {
+      method: 'POST',
+      body: JSON.stringify({ numbers }),
+    });
+  }
+
+  async uploadPoolNumbersFile(poolId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const apiUrl = this.getApiUrl();
+    const response = await fetch(`${apiUrl}/callerid-pools/${poolId}/import`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al importar');
+    }
+
+    return response.json();
+  }
+
+  async deletePoolNumber(poolId: number, numberId: number) {
+    return this.request(`/callerid-pools/${poolId}/numbers/${numberId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async togglePoolNumber(poolId: number, numberId: number, isActive: boolean) {
+    return this.request(`/callerid-pools/${poolId}/numbers/${numberId}/toggle`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_active: isActive }),
+    });
+  }
+
+  async getPoolLogs(poolId: number, limit = 100, offset = 0) {
+    return this.request(`/callerid-pools/${poolId}/logs?limit=${limit}&offset=${offset}`);
+  }
+
+  // Schedules
+  async getSchedules() {
+    return this.request('/schedules');
+  }
+
+  async getUpcomingSchedules(start?: string, end?: string) {
+    const params = new URLSearchParams();
+    if (start) params.append('start', start);
+    if (end) params.append('end', end);
+    return this.request(`/schedules/upcoming?${params.toString()}`);
+  }
+
+  async createSchedule(data: {
+    schedule_type: 'list' | 'campaign';
+    target_id: string;
+    target_name?: string;
+    action: 'activate' | 'deactivate';
+    scheduled_at: string;
+    end_at?: string | null;
+    recurring?: 'none' | 'daily' | 'weekly' | 'monthly';
+  }) {
+    return this.request('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSchedule(id: number, data: {
+    scheduled_at?: string;
+    end_at?: string | null;
+    action?: 'activate' | 'deactivate';
+    recurring?: 'none' | 'daily' | 'weekly' | 'monthly';
+  }) {
+    return this.request(`/schedules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSchedule(id: number) {
+    return this.request(`/schedules/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getScheduleTargetCampaigns() {
+    return this.request('/schedules/targets/campaigns');
+  }
+
+  async getScheduleTargetLists() {
+    return this.request('/schedules/targets/lists');
+  }
+
+  // IVR Flows & Executions
+  async getIvrNodeTypes() {
+    return this.request('/ivr-flows/node-types');
+  }
+
+  async getIvrFlow(campaignId: string) {
+    return this.request(`/ivr-flows/${campaignId}`);
+  }
+
+  async saveIvrFlow(campaignId: string, flow: any, is_active: boolean = true) {
+    return this.request(`/ivr-flows/${campaignId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ flow, is_active }),
+    });
+  }
+
+  async getIvrExecutions(campaignId: string, limit = 50) {
+    return this.request(`/ivr-flows/${campaignId}/executions?limit=${limit}`);
+  }
+
+  async getIvrExecutionDetail(id: number) {
+    return this.request(`/ivr-flows/executions/${id}`);
+  }
+
+  // Trunks API
+  async getTrunks() {
+    return this.request('/trunks');
+  }
+
+  async getTrunkStatuses() {
+    return this.request('/trunks/status');
+  }
+
+  async createTrunk(data: any) {
+    return this.request('/trunks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTrunk(id: string, data: any) {
+    return this.request(`/trunks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTrunk(id: string) {
+    return this.request(`/trunks/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async reloadTrunks() {
+    return this.request('/trunks/reload', {
+      method: 'POST',
+    });
+  }
+
+  // Users API
+  async getUsers() {
+    return this.request('/users');
+  }
+
+  async createUser(data: any) {
+    return this.request('/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateUser(id: string, data: any) {
+    return this.request(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteUser(id: string) {
+    return this.request(`/users/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // User API Tokens
+  async generateApiToken(userId: string) {
+    return this.request(`/users/${userId}/api-token`, {
+      method: 'POST',
+    });
+  }
+
+  async revokeApiToken(userId: string) {
+    return this.request(`/users/${userId}/api-token`, {
+      method: 'DELETE',
+    });
+  }
+
+  // User Campaigns Assignments
+  async getUserCampaigns(userId: string) {
+    return this.request(`/users/${userId}/campaigns`);
+  }
+
+  async updateUserCampaigns(userId: string, campaignIds: string[]) {
+    return this.request(`/users/${userId}/campaigns`, {
+      method: 'PUT',
+      body: JSON.stringify({ campaign_ids: campaignIds }),
+    });
+  }
+
+  // Roles & Permissions API
+  async getRoles() {
+    return this.request('/roles');
+  }
+
+  async createRole(role: string) {
+    return this.request('/roles', {
+      method: 'POST',
+      body: JSON.stringify({ role }),
+    });
+  }
+
+  async deleteRole(role_id: number | string) {
+    return this.request(`/roles/${role_id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getRolePermissions() {
+    return this.request('/roles/permissions');
+  }
+
+  async updateRolePermissions(role_id: number | string, permissions: string[]) {
+    return this.request(`/roles/${role_id}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions }),
+    });
+  }
+
+  // Support Tickets API
+  async getTickets(filters?: { status?: string; created_by?: string }) {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.created_by) params.append('created_by', filters.created_by);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/tickets${query}`);
+  }
+
+  async getTicket(id: number) {
+    return this.request(`/tickets/${id}`);
+  }
+
+  async createTicket(data: { title: string; description: string; priority: string; cliente?: string; url?: string; pais?: string; telefono?: string; usuario?: string; }) {
+    return this.request('/tickets', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async addTicketComment(ticketId: number, body: string) {
+    return this.request(`/tickets/${ticketId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async addTicketAttachment(ticketId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const apiUrl = this.getApiUrl();
+    let authHeaders: Record<string, string> = {};
+    try {
+      const authStr = localStorage.getItem('auth-storage');
+      if (authStr) {
+        const authData = JSON.parse(authStr);
+        const token = authData?.state?.session?.token;
+        if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+      }
+    } catch (e) {
+      // Ignore
+    }
+
+    const response = await fetch(`${apiUrl}/tickets/${ticketId}/attachments`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      let data;
+      try { data = await response.json(); } catch (e) { }
+      throw new Error(data?.error || 'Error subiendo archivo');
+    }
+
+    return response.json();
+  }
+
+  async updateTicketStatus(ticketId: number, status: string) {
+    return this.request(`/tickets/${ticketId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  // TTS Nodes API
+  async getTTSNodes() {
+    return this.request('/tts-nodes');
+  }
+
+  async getActiveTTSNodes() {
+    return this.request('/tts-nodes/active');
+  }
+
+  async createTTSNode(data: { name: string; url: string; is_active?: boolean }) {
+    return this.request('/tts-nodes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTTSNode(id: number, data: { name?: string; url?: string; is_active?: boolean }) {
+    return this.request(`/tts-nodes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTTSNode(id: number) {
+    return this.request(`/tts-nodes/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getSwaggerDocs() {
+    return this.request('/docs.json');
+  }
+
+  // --- Settings ---
+  async getSettings() {
+    return this.request('/api/settings');
+  }
+
+  async updateSettings(settings: Record<string, string>) {
+    return this.request('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    });
+  }
+}
+
+const api = new ApiService();
+export default api;

@@ -1,0 +1,217 @@
+#!/usr/bin/perl
+#
+# callerid_local_presence.agi - GesCall CallerID Local Presence (Auto-Campaign Version)
+# 
+# Automatically detects campaign_id from Vicidial's call data
+# Works for ALL campaigns without dialplan modifications per campaign
+#
+# Usage in dialplan (replaces aleatorio_callerid.agi):
+# exten => _X.,n,AGI(callerid_local_presence.agi)
+#
+
+use strict;
+use warnings;
+use DBI;
+
+# Database configuration
+my $DB_HOST = 'localhost';
+my $DB_NAME = 'asterisk';
+my $DB_USER = 'cron';
+my $DB_PASS = '1234';
+
+my $DEBUG = 1;
+
+# Read AGI environment
+my %AGI;
+while (<STDIN>) {
+    chomp;
+    last if /^$/;
+    if (/^agi_(\w+)\:\s*(.*)$/) {
+        $AGI{$1} = $2;
+    }
+}
+
+# Get phone number from extension or argument
+my $phone_number = $ARGV[0] || $AGI{'extension'} || $AGI{'dnid'} || '';
+$phone_number =~ s/\D//g;
+
+# Get uniqueid for looking up campaign
+my $uniqueid = $AGI{'uniqueid'} || '';
+my $uniqueid_base = $uniqueid;
+$uniqueid_base =~ s/\..*$//;  # Remove everything after the dot
+
+# Get area code (first 3 digits, skip prefix if present)
+my $area_code = '';
+if ($phone_number =~ /^52(\d{3})/) {
+    $area_code = $1;  # For 52XXXXXXXX format
+} elsif ($phone_number =~ /^(\d{3})/) {
+    $area_code = $1;  # Standard format
+}
+
+# Log function
+sub agi_log {
+    my ($msg) = @_;
+    print STDERR "[GesCall CID] $msg\n" if $DEBUG;
+}
+
+# AGI command
+sub agi_exec {
+    my ($cmd) = @_;
+    print "$cmd\n";
+    my $result = <STDIN>;
+    chomp($result) if $result;
+    return $result;
+}
+
+agi_log("Phone: $phone_number, AreaCode: $area_code, UniqueID: $uniqueid_base");
+
+# Exit if no valid area code
+if (length($area_code) < 3) {
+    agi_log("Invalid area code - skipping");
+    agi_exec("SET VARIABLE GESCALL_RESULT \"SKIP\"");
+    exit(0);
+}
+
+# Connect to database
+my $dsn = "DBI:mysql:database=$DB_NAME;host=$DB_HOST;charset=utf8";
+my $dbh = DBI->connect($dsn, $DB_USER, $DB_PASS, { RaiseError => 0, PrintError => 0 });
+
+if (!$dbh) {
+    agi_log("ERROR: Cannot connect to database");
+    exit(0);
+}
+
+# Get campaign_id from vicidial_auto_calls or vicidial_log using uniqueid
+my $campaign_id = '';
+my $lead_id = 0;
+
+# Try vicidial_auto_calls first (active calls)
+my $sth = $dbh->prepare("SELECT campaign_id, lead_id FROM vicidial_auto_calls WHERE callerid LIKE ? OR uniqueid LIKE ? LIMIT 1");
+$sth->execute("%$uniqueid_base%", "%$uniqueid_base%");
+my $call_row = $sth->fetchrow_hashref();
+
+if ($call_row && $call_row->{campaign_id}) {
+    $campaign_id = $call_row->{campaign_id};
+    $lead_id = $call_row->{lead_id} || 0;
+    agi_log("Found campaign from vicidial_auto_calls: $campaign_id");
+} else {
+    # Try vicidial_log (recently dialed)
+    $sth = $dbh->prepare("SELECT campaign_id, lead_id FROM vicidial_log WHERE uniqueid LIKE ? ORDER BY call_date DESC LIMIT 1");
+    $sth->execute("%$uniqueid_base%");
+    my $log_row = $sth->fetchrow_hashref();
+    
+    if ($log_row && $log_row->{campaign_id}) {
+        $campaign_id = $log_row->{campaign_id};
+        $lead_id = $log_row->{lead_id} || 0;
+        agi_log("Found campaign from vicidial_log: $campaign_id");
+    }
+}
+
+# If still no campaign, try to get from CDR accountcode (set by older Vicidial)
+if (!$campaign_id) {
+    agi_log("No campaign found - will check all enabled pools");
+}
+
+# Get campaign CallerID settings (or use first enabled pool if no campaign)
+my $settings;
+if ($campaign_id) {
+    $sth = $dbh->prepare("
+        SELECT rotation_mode, pool_id, match_mode, fixed_area_code, 
+               fallback_callerid, selection_strategy
+        FROM gescall_campaign_callerid_settings 
+        WHERE campaign_id = ? AND rotation_mode = 'POOL'
+    ");
+    $sth->execute($campaign_id);
+    $settings = $sth->fetchrow_hashref();
+}
+
+# If no specific campaign settings, check if there's a default pool with this area code
+if (!$settings) {
+    $sth = $dbh->prepare("
+        SELECT p.id as pool_id, 'ROUND_ROBIN' as selection_strategy, 'LEAD' as match_mode,
+               NULL as fixed_area_code, NULL as fallback_callerid
+        FROM gescall_callerid_pools p
+        JOIN gescall_callerid_pool_numbers n ON p.id = n.pool_id
+        WHERE p.is_active = 1 AND n.area_code = ? AND n.is_active = 1
+        LIMIT 1
+    ");
+    $sth->execute($area_code);
+    $settings = $sth->fetchrow_hashref();
+    
+    if ($settings) {
+        agi_log("Using default pool for area code $area_code");
+    }
+}
+
+if (!$settings) {
+    agi_log("No pool configured for area code $area_code - using default CallerID");
+    agi_exec("SET VARIABLE GESCALL_RESULT \"NO_POOL\"");
+    $dbh->disconnect;
+    exit(0);
+}
+
+# Determine target area code
+my $target_area_code = ($settings->{match_mode} eq 'FIXED' && $settings->{fixed_area_code}) 
+    ? $settings->{fixed_area_code} 
+    : $area_code;
+
+agi_log("Target area code: $target_area_code, Strategy: $settings->{selection_strategy}");
+
+# Select CallerID based on strategy
+my $callerid = '';
+my $number_id = 0;
+my $pool_id = $settings->{pool_id};
+my $strategy = $settings->{selection_strategy} || 'ROUND_ROBIN';
+
+if ($strategy eq 'RANDOM') {
+    $sth = $dbh->prepare("SELECT id, callerid FROM gescall_callerid_pool_numbers WHERE pool_id = ? AND area_code = ? AND is_active = 1 ORDER BY RAND() LIMIT 1");
+} elsif ($strategy eq 'LRU') {
+    $sth = $dbh->prepare("SELECT id, callerid FROM gescall_callerid_pool_numbers WHERE pool_id = ? AND area_code = ? AND is_active = 1 ORDER BY last_used_at ASC, id ASC LIMIT 1");
+} else {
+    $sth = $dbh->prepare("SELECT id, callerid FROM gescall_callerid_pool_numbers WHERE pool_id = ? AND area_code = ? AND is_active = 1 ORDER BY rr_order ASC, id ASC LIMIT 1");
+}
+
+$sth->execute($pool_id, $target_area_code);
+my $row = $sth->fetchrow_hashref();
+$sth->finish();
+
+if ($row && $row->{callerid}) {
+    $callerid = $row->{callerid};
+    $number_id = $row->{id};
+    
+    agi_log("MATCHED: CallerID=$callerid");
+    
+    # Update usage stats
+    if ($strategy eq 'ROUND_ROBIN') {
+        my $max_sth = $dbh->prepare("SELECT COALESCE(MAX(rr_order),0)+1 as new_order FROM gescall_callerid_pool_numbers WHERE pool_id = ? AND area_code = ?");
+        $max_sth->execute($pool_id, $target_area_code);
+        my $max_row = $max_sth->fetchrow_hashref();
+        $max_sth->finish();
+        my $new_order = $max_row->{new_order} || 1;
+        $dbh->do("UPDATE gescall_callerid_pool_numbers SET rr_order = ?, last_used_at = NOW(), use_count = use_count + 1 WHERE id = ?", undef, $new_order, $number_id);
+    } else {
+        $dbh->do("UPDATE gescall_callerid_pool_numbers SET last_used_at = NOW(), use_count = use_count + 1 WHERE id = ?", undef, $number_id);
+    }
+    
+    # Log usage
+    $dbh->do("INSERT INTO gescall_callerid_usage_log (campaign_id, lead_id, phone_number, callerid_used, area_code_target, pool_id, selection_result, strategy) VALUES (?, ?, ?, ?, ?, ?, 'MATCHED', ?)", 
+        undef, $campaign_id || 'UNKNOWN', $lead_id, $phone_number, $callerid, $target_area_code, $pool_id, $strategy);
+    
+    # Set AGI variables
+    agi_exec("SET VARIABLE GESCALL_CID \"$callerid\"");
+    agi_exec("SET VARIABLE llamado_num \"$callerid\"");
+    agi_exec("SET VARIABLE GESCALL_RESULT \"MATCHED\"");
+    
+} elsif ($settings->{fallback_callerid}) {
+    $callerid = $settings->{fallback_callerid};
+    agi_log("FALLBACK: $callerid");
+    agi_exec("SET VARIABLE GESCALL_CID \"$callerid\"");
+    agi_exec("SET VARIABLE llamado_num \"$callerid\"");
+    agi_exec("SET VARIABLE GESCALL_RESULT \"FALLBACK\"");
+} else {
+    agi_log("No CallerID for area code $target_area_code");
+    agi_exec("SET VARIABLE GESCALL_RESULT \"DEFAULT\"");
+}
+
+$dbh->disconnect;
+exit(0);

@@ -1,0 +1,86 @@
+[Auth] RSA key pair generated
+
+╔════════════════════════════════════════════╗
+║  Vicidial Admin Panel Backend Server      ║
+╠════════════════════════════════════════════╣
+║  Server running on port: 3001              ║
+║  Environment: development                ║
+║  Database: 209.38.233.46:3306        ║
+║  Vicidial API: Configured          ║
+╚════════════════════════════════════════════╝
+  
+✓ Database connected successfully
+✓ Database connection successful
+[Socket.IO] Client connected: Y2roDgmr6oTTvX0yAAAB
+[Socket.IO] Client connected: raG__YN3Ne9coaL3AAAD
+[2026-01-01T19:21:45.122Z] GET /api/campaigns
+[Campaigns] ========================================
+[Campaigns] Campaigns requested
+[Campaigns] Total campaigns returned: 17
+[Campaigns] Campaign IDs: COLOMB01, FALABE01, FALABE03, FALABE04, FALABESP, GESCALL, LEGAXI01, LEGAXI02, LEGAXI03, LEGAXI04, LEGAXI05, LEGAXI06, LEGAXI10, LEGAXI11, LEGAXI12, POLITIC1, PRUEBAS
+[Campaigns] First campaign structure: {
+  "campaign_id": "COLOMB01",
+  "campaign_name": "Pruebas Colombia",
+  "campaign_description": "",
+  "active": "N",
+  "dial_method": "RATIO",
+  "auto_dial_level": "1",
+  "dial_timeout": 60,
+  "dial_prefix": "57",
+  "campaign_cid": "0000000000",
+  "park_ext": "",
+  "park_file_name": "",
+  "web_form_address": "",
+  "allow_closers": "Y",
+  "hopper_level": 1000,
+  "auto_alt_dial": "NONE",
+  "use_internal_dnc": "N",
+  "use_campaign_dnc": "N",
+  "lead_order": "DOWN",
+  "lead_filter_id": "NONE"
+}
+[Campaigns] ========================================
+[2026-01-01T19:21:46.174Z] POST /api/campaigns/FALABE01/progress
+[2026-01-01T19:21:46.176Z] POST /api/campaigns/COLOMB01/progress
+[2026-01-01T19:21:46.188Z] POST /api/campaigns/FALABE03/progress
+[2026-01-01T19:21:46.266Z] POST /api/campaigns/LEGAXI01/progress
+[2026-01-01T19:21:46.269Z] POST /api/campaigns/GESCALL/progress
+[2026-01-01T19:21:46.294Z] POST /api/campaigns/FALABE04/progress
+[Campaign Progress] Campaign: FALABE01, Data: {
+  campaign_id: 'FALABE01',
+  total: 2454,
+  avance: 2454,
+  porcentaje: '100.00'
+}
+[2026-01-01T19:21:46.626Z] POST /api/campaigns/FALABESP/progress
+[Campaign Progress] Campaign: FALABESP, Data: null
+[2026-01-01T19:21:46.913Z] POST /api/campaigns/LEGAXI02/progress
+[Campaign Progress] Campaign: FALABE03, Data: { campaign_id: 'FALABE03', total: 4, avance: 4, porcentaje: '100.00' }
+[Campaign Progress] Campaign: COLOMB01, Data: { campaign_id: 'COLOMB01', total: 20, avance: 6, porcentaje: '30.00' }
+[Campaign Progress] Campaign: FALABE04, Data: { campaign_id: 'FALABE04', total: 2, avance: 2, porcentaje: '100.00' }
+[Campaign Progress] Campaign: LEGAXI01, Data: null
+[Campaign Progress] Campaign: GESCALL, Data: {
+  campaign_id: 'GESCALL',
+  total: 211,
+  avance: 211,
+  porcentaje: '100.00'
+}
+[2026-01-01T19:21:47.052Z] POST /api/campaigns/LEGAXI03/progress
+[Campaign Progress] Campaign: LEGAXI02, Data: null
+[2026-01-01T19:21:47.073Z] POST /api/campaigns/LEGAXI04/progress
+[2026-01-01T19:21:47.163Z] POST /api/campaigns/LEGAXI06/progress
+[2026-01-01T19:21:47.164Z] POST /api/campaigns/LEGAXI05/progress
+[2026-01-01T19:21:47.172Z] POST /api/campaigns/LEGAXI10/progress
+[Campaign Progress] Campaign: LEGAXI03, Data: null
+[2026-01-01T19:21:47.209Z] POST /api/campaigns/LEGAXI11/progress
+[Campaign Progress] Campaign: LEGAXI04, Data: null
+[Campaign Progress] Campaign: LEGAXI05, Data: null
+[Campaign Progress] Campaign: LEGAXI06, Data: null
+[Campaign Progress] Campaign: LEGAXI10, Data: { campaign_id: 'LEGAXI10', total: 4, avance: 4, porcentaje: '100.00' }
+[2026-01-01T19:21:47.337Z] POST /api/campaigns/LEGAXI12/progress
+[Campaign Progress] Campaign: LEGAXI11, Data: { campaign_id: 'LEGAXI11', total: 9, avance: 9, porcentaje: '100.00' }
+[2026-01-01T19:21:47.365Z] POST /api/campaigns/POLITIC1/progress
+[2026-01-01T19:21:47.444Z] POST /api/campaigns/PRUEBAS/progress
+[Campaign Progress] Campaign: LEGAXI12, Data: { campaign_id: 'LEGAXI12', total: 6, avance: 6, porcentaje: '100.00' }
+[Campaign Progress] Campaign: POLITIC1, Data: null
+[Campaign Progress] Campaign: PRUEBAS, Data: null
