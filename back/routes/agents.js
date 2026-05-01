@@ -1,40 +1,23 @@
 const express = require('express');
 const router = express.Router();
-const vicidialApi = require('../services/vicidialApi');
 
 /**
  * GET /api/agents/logged-in
- * Get all logged in agents
+ * Get all logged in agents (Native Mode)
  */
 router.get('/logged-in', async (req, res) => {
-  try {
-    const { campaigns, user_groups } = req.query;
-
-    const result = await vicidialApi.getLoggedInAgents({
-      campaigns: campaigns || '',
-      user_groups: user_groups || '',
-    });
-
-    if (result.success) {
-      const parsed = vicidialApi.parseResponse(result.data);
-      res.json({
-        success: true,
-        data: parsed,
-        count: parsed.length,
-        raw: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
+    try {
+        // In native Postgres/Asterisk mode, agent sessions are not tracked in Vicidial tables.
+        // For now, return an empty array until a native agent portal is fully built.
+        res.json({
+            success: true,
+            data: [],
+            count: 0
+        });
+    } catch (error) {
+        console.error('[pg_agents logged-in] Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 /**
@@ -42,32 +25,19 @@ router.get('/logged-in', async (req, res) => {
  * Get status of a specific agent
  */
 router.get('/:agent_user/status', async (req, res) => {
-  try {
-    const { agent_user } = req.params;
-
-    const result = await vicidialApi.getAgentStatus({
-      agent_user,
-    });
-
-    if (result.success) {
-      const parsed = vicidialApi.parseResponse(result.data);
-      res.json({
-        success: true,
-        data: parsed[0] || {},
-        raw: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
+    try {
+        // Mocked response for native mode.
+        res.json({
+            success: true,
+            data: {
+                user: req.params.agent_user,
+                status: 'OFFLINE'
+            }
+        });
+    } catch (error) {
+        console.error('[pg_agents status] Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 module.exports = router;

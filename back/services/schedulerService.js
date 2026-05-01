@@ -4,7 +4,7 @@
  */
 
 const cron = require('node-cron');
-const vicidialApi = require('./vicidialApi');
+
 const USE_NATIVE_DB = process.env.USE_GESCALL_DIALER === 'true';
 
 class SchedulerService {

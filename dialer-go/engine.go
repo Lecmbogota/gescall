@@ -20,6 +20,12 @@ type Campaign struct {
 	CallerID        string
 	AutoDialLevel   float64
 	AltPhoneEnabled bool
+	CampaignType    string
+	// Per-campaign trunk overrides (from gescall_trunks via trunk_id)
+	TrunkEndpoint string // trunk_id used as PJSIP endpoint name
+	TrunkHost     string
+	TrunkPort     string
+	TrunkPrefix   string
 }
 
 type DialerEngine struct {
@@ -235,18 +241,50 @@ func (d *DialerEngine) tick() {
 
 		activeCount, _ := d.getActiveCount(camp.CampaignID)
 		
-		// Campaign's specific CPS limit from auto_dial_level
-		campaignCps := int(camp.AutoDialLevel)
-		if campaignCps <= 0 {
-			campaignCps = 1 // Prevent total freeze if accidentally set to <= 0
-		}
-		
-		maxToPopThisCamp := campaignCps
+		maxToPopThisCamp := 0
 
-		if d.checkIntervalMs < 1000 {
-			maxToPopThisCamp = int(float64(campaignCps) * (float64(d.checkIntervalMs) / 1000.0))
-			if maxToPopThisCamp < 1 && campaignCps > 0 {
-				maxToPopThisCamp = 1 // ensure at least 1 pop if we are ticking fast
+		if camp.CampaignType == "BLASTER" || camp.CampaignType == "" {
+			// Blaster pacing (pure CPS based on auto_dial_level as limit)
+			campaignCps := int(camp.AutoDialLevel)
+			if campaignCps <= 0 {
+				campaignCps = 1
+			}
+			maxToPopThisCamp = campaignCps
+
+			if d.checkIntervalMs < 1000 {
+				maxToPopThisCamp = int(float64(campaignCps) * (float64(d.checkIntervalMs) / 1000.0))
+				if maxToPopThisCamp < 1 && campaignCps > 0 {
+					maxToPopThisCamp = 1
+				}
+			}
+		} else if camp.CampaignType == "OUTBOUND_PREDICTIVE" || camp.CampaignType == "OUTBOUND_PROGRESSIVE" {
+			// Predictive/Progressive pacing based on Ready Agents
+			agentKeys, err := Redis.Keys(ctx, "gescall:agent:*").Result()
+			readyCount := 0
+			if err == nil {
+				for _, ak := range agentKeys {
+					stateMap, _ := Redis.HGetAll(ctx, ak).Result()
+					if stateMap["state"] == "READY" && stateMap["campaign_id"] == camp.CampaignID {
+						readyCount++
+					}
+				}
+			}
+			
+			if readyCount > 0 {
+				multiplier := camp.AutoDialLevel
+				if multiplier <= 0 {
+					multiplier = 1.0 // fallback
+				}
+				targetConcurrent := int(float64(readyCount) * multiplier)
+				neededCalls := targetConcurrent - activeCount
+				if neededCalls > 0 {
+					maxToPopThisCamp = neededCalls
+				}
+			}
+			
+			// Respect global max cps per tick
+			if maxToPopThisCamp > d.maxCps {
+				maxToPopThisCamp = d.maxCps
 			}
 		}
 
@@ -294,7 +332,16 @@ func (d *DialerEngine) tick() {
 }
 
 func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
-	rows, err := DB.Query("SELECT campaign_id, dial_prefix, dial_method, campaign_cid, auto_dial_level, alt_phone_enabled FROM gescall_campaigns WHERE active = true AND dial_method = 'RATIO'")
+	rows, err := DB.Query(`
+		SELECT 
+			c.campaign_id, c.dial_prefix, c.dial_method, c.campaign_cid, 
+			c.auto_dial_level, c.alt_phone_enabled, c.campaign_type,
+			t.trunk_id, t.provider_host, t.provider_port, t.dial_prefix AS trunk_dial_prefix
+		FROM gescall_campaigns c
+		LEFT JOIN gescall_trunks t ON c.trunk_id = t.trunk_id
+		WHERE c.active = true 
+		  AND c.campaign_type IN ('BLASTER', 'OUTBOUND_PREDICTIVE', 'OUTBOUND_PROGRESSIVE')
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -303,10 +350,12 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 	var campaigns []Campaign
 	for rows.Next() {
 		var c Campaign
-		var prefix, cid sql.NullString
+		var prefix, cid, ctype sql.NullString
 		var autoDial sql.NullFloat64
 		var altPhone sql.NullBool
-		if err := rows.Scan(&c.CampaignID, &prefix, &c.DialMethod, &cid, &autoDial, &altPhone); err == nil {
+		var trunkID, trunkHost, trunkDialPrefix sql.NullString
+		var trunkPort sql.NullInt64
+		if err := rows.Scan(&c.CampaignID, &prefix, &c.DialMethod, &cid, &autoDial, &altPhone, &ctype, &trunkID, &trunkHost, &trunkPort, &trunkDialPrefix); err == nil {
 			if prefix.Valid {
 				c.DialPrefix = prefix.String
 			}
@@ -322,6 +371,24 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 				c.AltPhoneEnabled = altPhone.Bool
 			} else {
 				c.AltPhoneEnabled = false
+			}
+			if ctype.Valid {
+				c.CampaignType = ctype.String
+			} else {
+				c.CampaignType = "BLASTER"
+			}
+			// Per-campaign trunk (fallback to global env if not set)
+			if trunkID.Valid && trunkID.String != "" {
+				c.TrunkEndpoint = trunkID.String
+				c.TrunkHost = trunkHost.String
+				if trunkPort.Valid {
+					c.TrunkPort = fmt.Sprintf("%d", trunkPort.Int64)
+				} else {
+					c.TrunkPort = "5060"
+				}
+				if trunkDialPrefix.Valid {
+					c.TrunkPrefix = trunkDialPrefix.String
+				}
 			}
 			campaigns = append(campaigns, c)
 		} else {
@@ -393,12 +460,30 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 		return
 	}
 
-	// Target URI
+	// Target URI - use per-campaign trunk if set, otherwise global defaults
 	fullNumber := camp.DialPrefix + targetPhone
-	endpointURI := fmt.Sprintf("PJSIP/%s/sip:%s%s@%s:%s", d.sbcEndpoint, d.sbcPrefix, fullNumber, d.sbcHost, d.sbcPort)
+	var endpointURI string
+	if camp.TrunkEndpoint != "" {
+		// Campaign has a specific trunk assigned
+		trunkPrefix := camp.TrunkPrefix
+		if trunkPrefix == "" {
+			trunkPrefix = d.sbcPrefix // fallback to global
+		}
+		endpointURI = fmt.Sprintf("PJSIP/%s/sip:%s%s@%s:%s", camp.TrunkEndpoint, trunkPrefix, fullNumber, camp.TrunkHost, camp.TrunkPort)
+	} else {
+		// Use global SBC defaults from env
+		endpointURI = fmt.Sprintf("PJSIP/%s/sip:%s%s@%s:%s", d.sbcEndpoint, d.sbcPrefix, fullNumber, d.sbcHost, d.sbcPort)
+	}
+
+	// Get Dynamic CallerID
+	dynamicCid := d.getDynamicCallerID(targetPhone, camp.CampaignID, leadID)
+	finalCid := camp.CallerID
+	if dynamicCid != "" {
+		finalCid = dynamicCid
+	}
 
 	// CallerID syntax
-	formattedCid := fmt.Sprintf("\"%s\" <%s>", camp.CallerID, camp.CallerID)
+	formattedCid := fmt.Sprintf("\"%s\" <%s>", finalCid, finalCid)
 
 	// Make the ARI channel request
 	channelID, err := d.ariClient.Originate(OriginateRequest{
@@ -410,12 +495,14 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 		Variables: map[string]string{
 			"leadid": leadID,
 			"campaign_id": camp.CampaignID,
+			"campaign_type": camp.CampaignType,
 			"phone_number": targetPhone,
-			"__GESCALL_CID": camp.CallerID,
+			"__GESCALL_CID": finalCid,
 			"GESCALL_NATIVE": "YES", // Explicit flag for PG DB flows
 			"phone_index": strconv.Itoa(phoneIndex),
 			"alt_phone_enabled": strconv.FormatBool(camp.AltPhoneEnabled),
 			"is_alt_phone": altPhoneStr,
+			"trunk_id": camp.TrunkEndpoint,
 		},
 	})
 
@@ -444,12 +531,13 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 		"channel_id": channelID,
 		"phone_index": phoneIndex,
 		"alt_phone_enabled": camp.AltPhoneEnabled,
+		"trunk_id": camp.TrunkEndpoint,
 	})
 	Redis.Expire(ctx, callKey, 180*time.Second)
 
 	// Create PG Log
 	DB.Exec(`INSERT INTO gescall_call_log 
-			(lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed) 
-			VALUES ($1, $2, $3, $4, NOW(), 'DIALING', 0, '0')`,
-		leadID, targetPhone, camp.CampaignID, listID)
+			(lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id) 
+			VALUES ($1, $2, $3, $4, NOW(), 'DIALING', 0, '0', $5)`,
+		leadID, targetPhone, camp.CampaignID, listID, camp.TrunkEndpoint)
 }

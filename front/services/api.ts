@@ -1,7 +1,7 @@
 class ApiService {
   private getApiUrl(): string {
     let source = 'default';
-    let url = 'https://urlpro.cc/api';
+    let url = import.meta.env.VITE_API_URL || '/api';
 
     // Try to get from saved settings first
     try {
@@ -28,7 +28,7 @@ class ApiService {
     return url;
   }
 
-  private async request(endpoint: string, options: RequestInit = {}) {
+  public async request(endpoint: string, options: RequestInit = {}) {
     const url = `${this.getApiUrl()}${endpoint}`;
 
     let authHeaders: Record<string, string> = {};
@@ -83,6 +83,29 @@ class ApiService {
       console.error(`[API] Error ${options.method || 'GET'} ${endpoint}:`, error);
       throw error;
     }
+  }
+
+  // Generic REST Methods
+  async get(endpoint: string) {
+    return this.request(endpoint, { method: 'GET' });
+  }
+
+  async post(endpoint: string, data: any) {
+    return this.request(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async put(endpoint: string, data: any) {
+    return this.request(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async delete(endpoint: string) {
+    return this.request(endpoint, { method: 'DELETE' });
   }
 
   // Lists
@@ -229,6 +252,21 @@ class ApiService {
     return this.request(url);
   }
 
+  async getCampaignAgents(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/agents`);
+  }
+
+  async getCampaignAgentStatuses(campaignId: string) {
+    return this.request(`/campaigns/${campaignId}/agent-status`);
+  }
+
+  async assignCampaignAgents(campaignId: string, agents: string[]) {
+    return this.request(`/campaigns/${campaignId}/agents`, {
+      method: 'POST',
+      body: JSON.stringify({ agents }),
+    });
+  }
+
   async getCampaignStats(campaignId: string) {
     return this.request(`/campaigns/${campaignId}/stats`);
   }
@@ -338,6 +376,13 @@ class ApiService {
     return this.request(`/campaigns/${campaignId}/retries`, {
       method: 'PUT',
       body: JSON.stringify({ maxRetries }),
+    });
+  }
+
+  async updateCampaignTrunk(campaignId: string, trunkId: string | null) {
+    return this.request(`/campaigns/${campaignId}/trunk`, {
+      method: 'PUT',
+      body: JSON.stringify({ trunk_id: trunkId }),
     });
   }
 

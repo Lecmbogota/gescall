@@ -31,7 +31,7 @@ const sshConfig = {
     debug: (msg) => console.log('[SSH DEBUG]', msg), // Log SSH debug info
 };
 
-const soundsPath = process.env.VICIDIAL_SOUNDS_PATH || '/var/lib/asterisk/sounds';
+const soundsPath = process.env.ASTERISK_SOUNDS_PATH || '/var/lib/asterisk/sounds';
 
 /**
  * Execute SSH command

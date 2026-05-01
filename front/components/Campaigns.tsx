@@ -33,6 +33,7 @@ import { CampaignListView } from './CampaignListView';
 import { CampaignCompactView } from './CampaignCompactView';
 import { CampaignImmersiveView } from './CampaignImmersiveView';
 import { StandardPageHeader } from './ui/layout/StandardPageHeader';
+import { CampaignAgentsModal } from './CampaignAgentsModal';
 
 interface Campaign {
   id: string;
@@ -54,6 +55,9 @@ interface Campaign {
   leadStructureSchema?: {name: string, required: boolean, is_phone?: boolean}[];
   ttsTemplates?: any[];
   altPhoneEnabled?: boolean;
+  campaign_type?: string;
+  agent_count?: number;
+  trunk_id?: string | null;
 }
 
 interface CampaignsProps {
@@ -71,12 +75,15 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
 
   // Create campaign dialog
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [agentsModalOpen, setAgentsModalOpen] = useState(false);
+  const [selectedCampaignIdForAgents, setSelectedCampaignIdForAgents] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState({ 
     campaign_name: '', 
     dial_prefix: '52',
     auto_dial_level: '1.0',
     max_retries: 3,
-    campaign_cid: '0000000000'
+    campaign_cid: '0000000000',
+    campaign_type: 'BLASTER'
   });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -171,6 +178,9 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 leadStructureSchema: camp.lead_structure_schema || undefined,
                 ttsTemplates: camp.tts_templates || [],
                 altPhoneEnabled: camp.alt_phone_enabled || false,
+                campaign_type: camp.campaign_type || 'BLASTER',
+                agent_count: camp.agent_count || 0,
+                trunk_id: camp.trunk_id || null,
               };
             } catch (err) {
               console.error(`[Campaigns] Error fetching progress for ${camp.campaign_id}:`, err);
@@ -185,6 +195,8 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 activeAgents: 0,
                 lastActivity: new Date().toISOString(),
                 autoDialLevel: '0',
+                campaign_type: camp.campaign_type || 'BLASTER',
+                agent_count: 0,
               };
             }
           })
@@ -298,7 +310,8 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
           dial_prefix: '52',
           auto_dial_level: '1.0',
           max_retries: 3,
-          campaign_cid: '0000000000'
+          campaign_cid: '0000000000',
+          campaign_type: 'BLASTER'
         });
         // Close modal immediately
         setShowCreateDialog(false);
@@ -401,6 +414,24 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                   maxLength={40}
                   className="rounded-xl"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">Tipo de Campaña</label>
+                <Select
+                  value={createForm.campaign_type}
+                  onValueChange={(value) => setCreateForm(f => ({ ...f, campaign_type: value }))}
+                >
+                  <SelectTrigger className="rounded-xl">
+                    <SelectValue placeholder="Seleccione el tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="INBOUND">Inbound (Entrante)</SelectItem>
+                    <SelectItem value="OUTBOUND_PREDICTIVE">Outbound Predictivo</SelectItem>
+                    <SelectItem value="OUTBOUND_PROGRESSIVE">Outbound Progresivo</SelectItem>
+                    <SelectItem value="BLASTER">Blaster</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -515,6 +546,10 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                   onSelect={onSelectCampaign}
                   onArchive={() => handleArchiveCampaign(campaign.id)}
                   onUnarchive={() => handleUnarchiveCampaign(campaign.id)}
+                  onAssignAgents={() => {
+                    setSelectedCampaignIdForAgents(campaign.id);
+                    setAgentsModalOpen(true);
+                  }}
                 />
               ))}
 
@@ -588,6 +623,18 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
           )}
         </div>
       </div>
+
+      <CampaignAgentsModal
+        isOpen={agentsModalOpen}
+        campaignId={selectedCampaignIdForAgents || ''}
+        onClose={() => {
+          setAgentsModalOpen(false);
+          setSelectedCampaignIdForAgents(null);
+        }}
+        onSave={() => {
+          fetchCampaignsData(true);
+        }}
+      />
     </div>
   );
 }

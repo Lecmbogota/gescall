@@ -31,8 +31,8 @@ export const getEnvVar = (key: string, fallback: string = ''): string => {
 
 // Export commonly used environment variables
 export const ENV = {
-  API_URL: getEnvVar('VITE_API_URL', 'https://urlpro.cc/api'),
-  SOCKET_URL: getEnvVar('VITE_SOCKET_URL', 'https://urlpro.cc'),
+  API_URL: getEnvVar('VITE_API_URL', '/api'),
+  SOCKET_URL: getEnvVar('VITE_SOCKET_URL', '/'),
   NODE_ENV: getEnvVar('NODE_ENV', 'development'),
   MODE: getEnvVar('MODE', 'development'),
 };

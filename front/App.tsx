@@ -24,6 +24,7 @@ import SwaggerDocs from './components/SwaggerDocs';
 import { Toaster } from './components/ui/sonner';
 import { useAuthStore } from './stores/authStore';
 import authService from './services/authService';
+import { AgentWorkspace } from './components/AgentWorkspace';
 
 // Campaign type for navigation
 interface Campaign {
@@ -104,6 +105,28 @@ export default function App() {
         <Login onLogin={handleLogin} />
         <Toaster position="bottom-right" />
       </>
+    );
+  }
+
+  // Determine if user is an agent by explicitly evaluating their role group
+  const userGroupName = session?.user?.group?.toLowerCase() || '';
+  const isAgent = userGroupName === 'agente' || userGroupName === 'agent' || 
+                  (!session?.permissions?.granted?.includes('admin') && !session?.permissions?.granted?.includes('view_campaigns'));
+
+  if (isAgent) {
+    return (
+      <DndProvider backend={HTML5Backend}>
+        <DashboardLayout
+          username={username}
+          userLevel={getUserLevel()}
+          onLogout={handleLogout}
+          onNavigate={handleNavigate}
+          currentPage="agent-workspace"
+        >
+          <AgentWorkspace />
+        </DashboardLayout>
+        <Toaster position="bottom-right" />
+      </DndProvider>
     );
   }
 

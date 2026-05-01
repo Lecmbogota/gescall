@@ -1,46 +1,38 @@
 const express = require('express');
 const router = express.Router();
-const vicidialApi = require('../services/vicidialApi');
+const pg = require('../config/pgDatabase');
 
 /**
  * GET /api/leads/search
  * Search for leads by phone number
  */
 router.get('/search', async (req, res) => {
-  try {
-    const { phone_number, records } = req.query;
+    try {
+        const { phone_number, records = 1000 } = req.query;
 
-    if (!phone_number) {
-      return res.status(400).json({
-        success: false,
-        error: 'phone_number is required',
-      });
+        if (!phone_number) {
+            return res.status(400).json({ success: false, error: 'phone_number is required' });
+        }
+
+        const sql = `
+            SELECT l.*, ls.list_name, ls.campaign_id 
+            FROM gescall_leads l
+            LEFT JOIN gescall_lists ls ON l.list_id = ls.list_id
+            WHERE l.phone_number LIKE $1
+            ORDER BY l.created_at DESC
+            LIMIT $2
+        `;
+
+        const { rows } = await pg.query(sql, [`%${phone_number}%`, records]);
+
+        res.json({
+            success: true,
+            data: rows
+        });
+    } catch (error) {
+        console.error('[pg_leads] Search Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-
-    const result = await vicidialApi.searchLeads({
-      phone_number,
-      records: records || 1000,
-    });
-
-    if (result.success) {
-      const parsed = vicidialApi.parseResponse(result.data);
-      res.json({
-        success: true,
-        data: parsed,
-        raw: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 /**
@@ -48,34 +40,30 @@ router.get('/search', async (req, res) => {
  * Get all information about a specific lead
  */
 router.get('/:lead_id', async (req, res) => {
-  try {
-    const { lead_id } = req.params;
-    const { custom_fields } = req.query;
+    try {
+        const { lead_id } = req.params;
 
-    const result = await vicidialApi.getLeadAllInfo({
-      lead_id,
-      custom_fields: custom_fields || 'N',
-    });
+        const sql = `
+            SELECT l.*, ls.list_name, ls.campaign_id 
+            FROM gescall_leads l
+            LEFT JOIN gescall_lists ls ON l.list_id = ls.list_id
+            WHERE l.lead_id = $1
+        `;
 
-    if (result.success) {
-      const parsed = vicidialApi.parseResponse(result.data);
-      res.json({
-        success: true,
-        data: parsed[0] || {},
-        raw: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
+        const { rows } = await pg.query(sql, [lead_id]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Lead not found' });
+        }
+
+        res.json({
+            success: true,
+            data: rows[0]
+        });
+    } catch (error) {
+        console.error('[pg_leads] Get Lead Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 /**
@@ -83,76 +71,42 @@ router.get('/:lead_id', async (req, res) => {
  * Create a new lead
  */
 router.post('/', async (req, res) => {
-  try {
-    const {
-      phone_number,
-      phone_code,
-      list_id,
-      first_name,
-      last_name,
-      vendor_lead_code,
-      source_id,
-      address1,
-      city,
-      state,
-      postal_code,
-      email,
-      dnc_check,
-      duplicate_check,
-      custom_fields,
-      ...otherOptions
-    } = req.body;
+    try {
+        const {
+            phone_number,
+            list_id,
+            vendor_lead_code
+        } = req.body;
 
-    // Validación básica
-    if (!phone_number || !list_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: phone_number, list_id',
-      });
+        if (!phone_number || !list_id) {
+            return res.status(400).json({ success: false, error: 'Missing required fields: phone_number, list_id' });
+        }
+
+        const sql = `
+            INSERT INTO gescall_leads 
+            (list_id, phone_number, vendor_lead_code, status)
+            VALUES ($1, $2, $3, 'NEW')
+            RETURNING lead_id
+        `;
+
+        const values = [
+            list_id,
+            phone_number,
+            vendor_lead_code || null
+        ];
+
+        const { rows } = await pg.query(sql, values);
+
+        res.status(201).json({
+            success: true,
+            message: 'Lead created successfully',
+            lead_id: rows[0].lead_id,
+            data: rows[0]
+        });
+    } catch (error) {
+        console.error('[pg_leads] Create Lead Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-
-    const result = await vicidialApi.addLead({
-      phone_number,
-      phone_code: phone_code || '1',
-      list_id,
-      first_name,
-      last_name,
-      vendor_lead_code,
-      source_id,
-      address1,
-      city,
-      state,
-      postal_code,
-      email,
-      dnc_check,
-      duplicate_check,
-      custom_fields,
-      ...otherOptions,
-    });
-
-    if (result.success) {
-      // Extract lead_id from response if available
-      const leadIdMatch = result.data.match(/(\d+)\|-?\d+$/);
-      const leadId = leadIdMatch ? leadIdMatch[1] : null;
-
-      res.json({
-        success: true,
-        message: 'Lead created successfully',
-        lead_id: leadId,
-        data: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 /**
@@ -160,33 +114,55 @@ router.post('/', async (req, res) => {
  * Update an existing lead
  */
 router.put('/:lead_id', async (req, res) => {
-  try {
-    const { lead_id } = req.params;
-    const { ...options } = req.body;
+    try {
+        const { lead_id } = req.params;
+        const updates = req.body;
 
-    const result = await vicidialApi.updateLead({
-      lead_id,
-      ...options,
-    });
+        // Allowed fields for update in gescall_leads
+        const allowedFields = [
+            'list_id', 'status', 'phone_number', 
+            'vendor_lead_code', 'called_count'
+        ];
 
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Lead updated successfully',
-        data: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
+        const setClauses = [];
+        const values = [];
+        let paramIndex = 1;
+
+        for (const [key, value] of Object.entries(updates)) {
+            if (allowedFields.includes(key)) {
+                setClauses.push(`${key} = $${paramIndex}`);
+                values.push(value);
+                paramIndex++;
+            }
+        }
+
+        if (setClauses.length === 0) {
+            return res.status(400).json({ success: false, error: 'No valid fields provided for update' });
+        }
+
+        values.push(lead_id);
+        const sql = `
+            UPDATE gescall_leads
+            SET ${setClauses.join(', ')}
+            WHERE lead_id = $${paramIndex}
+            RETURNING *
+        `;
+
+        const { rows } = await pg.query(sql, values);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Lead not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Lead updated successfully',
+            data: rows[0]
+        });
+    } catch (error) {
+        console.error('[pg_leads] Update Lead Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 /**
@@ -194,32 +170,25 @@ router.put('/:lead_id', async (req, res) => {
  * Delete a lead
  */
 router.delete('/:lead_id', async (req, res) => {
-  try {
-    const { lead_id } = req.params;
+    try {
+        const { lead_id } = req.params;
 
-    const result = await vicidialApi.updateLead({
-      lead_id,
-      delete_lead: 'Y',
-    });
+        const sql = `DELETE FROM gescall_leads WHERE lead_id = $1 RETURNING lead_id`;
 
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Lead deleted successfully',
-        data: result.data,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.data,
-      });
+        const { rows } = await pg.query(sql, [lead_id]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Lead not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Lead deleted successfully'
+        });
+    } catch (error) {
+        console.error('[pg_leads] Delete Lead Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
 });
 
 module.exports = router;

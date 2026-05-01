@@ -199,7 +199,7 @@ module.exports = function (database) {
             // Optimización Gescall: Usar Keep-Alive Agent para reusar sockets TCP al modelo de IA
             const keepAliveAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
 
-            let TTS_API = process.env.PIPER_TTS_URL || 'http://69.30.85.181:22033/tts';
+            let TTS_API = process.env.PIPER_TTS_URL || 'http://127.0.0.1:5000/tts';
 
             try {
                 const rows = await executeQuery('SELECT url FROM gescall_tts_nodes WHERE is_active = TRUE');

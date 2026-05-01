@@ -559,29 +559,33 @@ export function DashboardLayout({
       </div>
 
       {/* Desktop Sidebar - Floating with auto-expand on hover */}
-      <aside
-        className={cn(
-          "hidden md:flex flex-col bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-200/60 transition-all duration-500 ease-out m-4 mr-0 z-50 relative",
-          isSidebarOpen ? "w-64" : "w-20",
-        )}
-        onMouseEnter={handleSidebarMouseEnter}
-        onMouseLeave={handleSidebarMouseLeave}
-      >
-        <SidebarContent />
-      </aside>
+      {currentPage !== 'agent-workspace' && (
+        <aside
+          className={cn(
+            "hidden md:flex flex-col bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-200/60 transition-all duration-500 ease-out m-4 mr-0 z-50 relative",
+            isSidebarOpen ? "w-64" : "w-20",
+          )}
+          onMouseEnter={handleSidebarMouseEnter}
+          onMouseLeave={handleSidebarMouseLeave}
+        >
+          <SidebarContent />
+        </aside>
+      )}
 
       {/* Mobile Menu Toggle Button - Fixed Top Left */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="md:hidden fixed top-4 left-4 z-50 bg-white/95 backdrop-blur-md shadow-lg border border-slate-200/60 rounded-xl"
-        onClick={() => setIsMobileSidebarOpen(true)}
-      >
-        <Menu className="w-5 h-5" />
-      </Button>
+      {currentPage !== 'agent-workspace' && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="md:hidden fixed top-4 left-4 z-50 bg-white/95 backdrop-blur-md shadow-lg border border-slate-200/60 rounded-xl"
+          onClick={() => setIsMobileSidebarOpen(true)}
+        >
+          <Menu className="w-5 h-5" />
+        </Button>
+      )}
 
       {/* Mobile Sidebar */}
-      {isMobileSidebarOpen && (
+      {currentPage !== 'agent-workspace' && isMobileSidebarOpen && (
         <>
           <div
             className="fixed inset-0 bg-black/50 z-40 md:hidden"

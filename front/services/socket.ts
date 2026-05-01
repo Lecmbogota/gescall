@@ -25,7 +25,7 @@ class SocketService {
       }
     } catch { }
 
-    return 'https://urlpro.cc';
+    return import.meta.env.VITE_SOCKET_URL || '/';
   }
 
   get isConnected(): boolean {
@@ -197,6 +197,16 @@ class SocketService {
       }
     });
     this.emit('agent:status:request', { agent_user: agentUser });
+  }
+
+  // Update agent status
+  updateAgentState(username: string, state: string, campaignId?: string) {
+    this.emit('agent:state:update', {
+      username,
+      state,
+      campaignId,
+      timestamp: Date.now()
+    });
   }
 }
 

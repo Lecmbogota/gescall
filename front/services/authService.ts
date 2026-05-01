@@ -22,7 +22,7 @@ class AuthService {
     }
 
     // Fallback to environment variable
-    return import.meta.env.VITE_API_URL || 'https://urlpro.cc/api';
+    return import.meta.env.VITE_API_URL || '/api';
   }
 
   /**
@@ -93,9 +93,9 @@ class AuthService {
   }
 
   /**
-   * Login to Vicidial using the backend API
-   * @param agent_user - Vicidial agent username
-   * @param password - Vicidial agent password
+   * Login to GesCall using the backend API
+   * @param agent_user - Agent username
+   * @param password - Agent password
    * @param useEncryption - Whether to use RSA encryption (default: true)
    */
   async login(
@@ -156,7 +156,6 @@ class AuthService {
         user: data.user,
         campaigns: data.campaigns || [],  // IMPORTANTE: Incluir campaigns array
         permissions: data.permissions,
-        vicidialUser: data.vicidialUser,   // Raw Vicidial data
         userGroupStatus: data.userGroupStatus,
         inGroupStatus: data.inGroupStatus,
         agentStatus: data.agentStatus,
@@ -189,12 +188,11 @@ class AuthService {
   }
 
   /**
-   * Logout (client-side only, Vicidial logout handled separately)
+   * Logout (client-side only)
    */
   logout(): void {
     console.log('[AuthService] Logging out...');
     // Clear any local state if needed
-    // Note: Actual Vicidial logout should be handled via NON-AGENT API
   }
 }
 

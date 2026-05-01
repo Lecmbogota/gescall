@@ -41,8 +41,9 @@ interface Campaign {
   lastActivity: string;
   hasCallerId?: boolean;
   hasBlacklist?: boolean;
-
   autoDialLevel?: string;
+  campaign_type?: string;
+  agent_count?: number;
 }
 
 interface CampaignCardProps {
@@ -50,9 +51,10 @@ interface CampaignCardProps {
   onSelect?: (campaign: Campaign) => void;
   onArchive?: () => void;
   onUnarchive?: () => void;
+  onAssignAgents?: () => void;
 }
 
-export function CampaignCard({ campaign, onSelect, onArchive, onUnarchive }: CampaignCardProps) {
+export function CampaignCard({ campaign, onSelect, onArchive, onUnarchive, onAssignAgents }: CampaignCardProps) {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   const isLoading = campaign.dialingMethod === 'Cargando...';
@@ -142,15 +144,27 @@ export function CampaignCard({ campaign, onSelect, onArchive, onUnarchive }: Cam
                 <h3 className="font-semibold text-slate-900 text-[13px] leading-tight line-clamp-2 tracking-tight group-hover:text-blue-600 transition-colors pt-0.5" title={campaign.name}>
                   {campaign.name}
                 </h3>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "px-1.5 py-0 text-[10px] font-semibold border transition-colors pointer-events-none capitalize shrink-0 h-fit",
-                    getStatusColor(campaign.status)
+                <div className="flex items-center gap-1.5">
+                  {campaign.campaign_type && (
+                    <Badge
+                      variant="outline"
+                      className="px-1.5 py-0 text-[9px] font-bold border transition-colors pointer-events-none shrink-0 h-fit bg-slate-50 text-slate-500 border-slate-200"
+                    >
+                      {campaign.campaign_type === 'INBOUND' ? 'INBOUND' : 
+                       campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? 'PREDICTIVO' : 
+                       campaign.campaign_type === 'OUTBOUND_PROGRESSIVE' ? 'PROGRESIVO' : 'BLASTER'}
+                    </Badge>
                   )}
-                >
-                  {getStatusText(campaign.status)}
-                </Badge>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "px-1.5 py-0 text-[10px] font-semibold border transition-colors pointer-events-none capitalize shrink-0 h-fit",
+                      getStatusColor(campaign.status)
+                    )}
+                  >
+                    {getStatusText(campaign.status)}
+                  </Badge>
+                </div>
               </div>
 
               {/* Divider - Bleeding full width */}
@@ -174,6 +188,14 @@ export function CampaignCard({ campaign, onSelect, onArchive, onUnarchive }: Cam
                       <span className="text-slate-300 mx-0.5">/</span>
                       {campaign.totalLeads.toLocaleString()}
                     </span>
+                  </div>
+                  
+                  {/* Agents Count */}
+                  <div className="flex items-center gap-1 text-[10px] font-medium text-slate-600" title="Agentes Asignados">
+                    <svg className="w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    <span className="tabular-nums">{campaign.agent_count || 0}</span>
                   </div>
                 </div>
 
@@ -238,6 +260,18 @@ export function CampaignCard({ campaign, onSelect, onArchive, onUnarchive }: Cam
             <Users className="w-4 h-4 text-slate-400" />
             <span>Ver detalles</span>
           </ContextMenuItem>
+          {onAssignAgents && (
+            <ContextMenuItem 
+              onClick={(e) => {
+                e.stopPropagation();
+                onAssignAgents();
+              }} 
+              className="gap-2 cursor-pointer"
+            >
+              <Users className="w-4 h-4 text-slate-400" />
+              <span>Asignar agentes</span>
+            </ContextMenuItem>
+          )}
           <ContextMenuSeparator />
           {campaign.status !== 'inactive' ? (
             <ContextMenuItem

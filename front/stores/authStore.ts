@@ -23,20 +23,6 @@ export interface User {
   is_system?: boolean;
 }
 
-// Raw Vicidial user data (for backwards compatibility)
-export interface VicidialUser {
-  user: string;
-  full_name?: string;
-  user_group?: string;
-  user_level?: string;
-  active?: string;
-  phone_login?: string;
-  phone_pass?: string;
-  email?: string;
-  user_code?: string;
-  territory?: string;
-  [key: string]: any;
-}
 
 export interface UserPermissions {
   user_group: string | null;
@@ -103,8 +89,6 @@ export interface AuthSession {
   // Complete permissions object
   permissions: UserPermissions;
 
-  // Raw Vicidial user data (backwards compatibility)
-  vicidialUser?: VicidialUser;
 
   // Additional status information
   userGroupStatus: UserGroupStatus[] | null;

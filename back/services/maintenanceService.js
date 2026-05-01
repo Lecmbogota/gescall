@@ -4,6 +4,7 @@
  */
 const pg = require('../config/pgDatabase');
 const redis = require('../config/redisClient');
+const { queryClickHouse } = require('../config/clickhouse');
 const loadHopper = require('../scripts/loadToRedisHopper');
 
 class MaintenanceService {
@@ -37,6 +38,9 @@ class MaintenanceService {
 
         // Every 3 min: Auto-deactivate exhausted campaigns
         this.intervals.push(setInterval(() => this.autoDeactivateExhaustedCampaigns(), 3 * 60 * 1000));
+
+        // Every 24 hours: Archive old call logs to ClickHouse to prevent Postgres bloat
+        this.intervals.push(setInterval(() => this.archiveOldCallLogs(), 24 * 60 * 60 * 1000));
 
         // Run immediately on start
         setTimeout(() => this.cleanupStuckLeads(), 5000);
@@ -213,6 +217,68 @@ class MaintenanceService {
             }
         } catch (err) {
             console.error('[Maintenance] Redis cleanup error:', err.message);
+        }
+    }
+
+    /**
+     * Archive logs from gescall_call_log to ClickHouse
+     */
+    async archiveOldCallLogs() {
+        try {
+            const retentionDays = parseInt(process.env.LOG_RETENTION_DAYS || '30');
+            
+            // 1. Find old logs
+            const selectResult = await pg.query(`
+                SELECT id, lead_id, phone_number, pool_callerid, campaign_id, list_id,
+                       call_date, call_status, dtmf_pressed, call_duration, uniqueid, created_at, updated_at
+                FROM gescall_call_log
+                WHERE call_date < NOW() - INTERVAL '${retentionDays} days'
+                LIMIT 50000; -- Process in batches
+            `);
+
+            if (selectResult.rows.length === 0) {
+                return; // Nothing to archive
+            }
+
+            console.log(`[Maintenance] 📦 Found ${selectResult.rows.length} old logs to archive to ClickHouse...`);
+
+            // 2. Format as NDJSON for ClickHouse
+            const ndjson = selectResult.rows.map(row => JSON.stringify({
+                id: String(row.id || ''),
+                lead_id: Number(row.lead_id) || 0,
+                phone_number: row.phone_number || '',
+                pool_callerid: row.pool_callerid || '',
+                campaign_id: row.campaign_id || '',
+                list_id: Number(row.list_id) || 0,
+                call_date: row.call_date ? row.call_date.toISOString().replace('T', ' ').substring(0, 19) : null,
+                call_status: row.call_status || '',
+                dtmf_pressed: row.dtmf_pressed || '',
+                call_duration: Number(row.call_duration) || 0,
+                uniqueid: row.uniqueid || '',
+                created_at: row.created_at ? row.created_at.toISOString().replace('T', ' ').substring(0, 19) : null,
+                updated_at: row.updated_at ? row.updated_at.toISOString().replace('T', ' ').substring(0, 19) : null
+            })).join('\n') + '\n';
+
+            // 3. Insert into ClickHouse
+            await queryClickHouse('INSERT INTO gescall_call_log_archive FORMAT JSONEachRow', ndjson);
+
+            // 4. Delete from PostgreSQL
+            // We use the exact IDs to avoid deleting rows inserted after our SELECT
+            const idsToDelete = selectResult.rows.map(r => r.id);
+            await pg.query(`
+                DELETE FROM gescall_call_log 
+                WHERE id = ANY($1::int[])
+            `, [idsToDelete]);
+
+            console.log(`[Maintenance] ✅ Successfully archived and deleted ${idsToDelete.length} records.`);
+
+            // If we hit the limit, there might be more, run again in 5 seconds
+            if (idsToDelete.length === 50000) {
+                setTimeout(() => this.archiveOldCallLogs(), 5000);
+            }
+
+        } catch (err) {
+            console.error('[Maintenance] Archival error:', err.message);
         }
     }
 }

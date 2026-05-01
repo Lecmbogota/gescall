@@ -13,7 +13,7 @@ const redis = require('../config/redisClient');
 const { STATUS, IVR_OUTCOME, fromAsteriskState } = require('../config/callStatus');
 
 const TTS_CACHE = '/var/lib/asterisk/sounds/tts/piper';
-const TTS_API = process.env.PIPER_TTS_URL || 'http://69.30.85.181:22033/tts';
+const TTS_API = process.env.PIPER_TTS_URL || 'http://127.0.0.1:5000/tts';
 const ARI_URL = process.env.ARI_URL || 'http://localhost:8088';
 const ARI_USER = process.env.ARI_USER || 'gescall';
 const ARI_PASS = process.env.ARI_PASS || 'gescall_ari_2026';
@@ -24,6 +24,11 @@ let io = null;
 
 // Active calls tracking
 const activeCalls = new Map(); // channelId -> { leadId, campaignId, flowState, ... }
+
+// Queue Management (Holding Bridges)
+const campaignBridges = new Map(); // campaignId -> bridgeId
+const queueWaiters = new Map(); // campaignId -> [{ channelId, joinTime, leadId }]
+let dispatcherInterval = null;
 
 /**
  * Initialize ARI connection
@@ -50,10 +55,111 @@ async function init(dbPool, socketIo) {
 
         ari.start('gescall-ivr');
         console.log('[ARI] Stasis application "gescall-ivr" registered');
+        
+        // Start Queue Dispatcher
+        if (!dispatcherInterval) {
+            dispatcherInterval = setInterval(dispatchQueues, 2000);
+        }
     } catch (err) {
         console.error('[ARI] Failed to connect:', err.message);
         // Retry after 5 seconds
         setTimeout(() => init(dbPool, socketIo), 5000);
+    }
+}
+
+// ─── QUEUE DISPATCHER ────────────────────────────────────────────
+
+async function getOrCreateBridge(campaignId) {
+    if (campaignBridges.has(campaignId)) {
+        return campaignBridges.get(campaignId);
+    }
+    try {
+        const bridge = await ari.bridges.create({ type: 'holding', name: `queue_${campaignId}` });
+        campaignBridges.set(campaignId, bridge.id);
+        return bridge.id;
+    } catch (err) {
+        console.error(`[ARI] Failed to create bridge for campaign ${campaignId}:`, err.message);
+        return null;
+    }
+}
+
+async function dispatchQueues() {
+    if (!ari) return;
+    for (const [campaignId, waiters] of queueWaiters.entries()) {
+        if (waiters.length === 0) continue;
+        
+        // Find ready agents for this campaign
+        try {
+            let assignedAgents = [];
+            let agentExtensions = {};
+            const pg = require('../config/pgDatabase');
+            if (pg) {
+                const res = await pg.query(`
+                    SELECT ca.username, u.sip_extension 
+                    FROM gescall_campaign_agents ca 
+                    JOIN gescall_users u ON ca.username = u.username 
+                    WHERE ca.campaign_id = $1
+                `, [campaignId]);
+                assignedAgents = res.rows.map(r => r.username);
+                res.rows.forEach(r => {
+                    agentExtensions[r.username] = r.sip_extension || r.username;
+                });
+            }
+
+            const agentKeys = await redis.keys(`gescall:agent:*`);
+            const readyAgents = [];
+            for (const key of agentKeys) {
+                const username = key.replace('gescall:agent:', '');
+                // Check if agent is assigned to this campaign
+                if (assignedAgents.length > 0 && !assignedAgents.includes(username)) continue;
+
+                const stateMap = await redis.hGetAll(key);
+                // Check if agent is READY
+                if (stateMap.state === 'READY') {
+                    readyAgents.push({
+                        username,
+                        lastChange: parseInt(stateMap.last_change || '0'),
+                        sipExtension: agentExtensions[username] || username
+                    });
+                }
+            }
+            
+            if (readyAgents.length === 0) continue;
+            
+            // RRMemory: sort by longest waiting (oldest last_change)
+            readyAgents.sort((a, b) => a.lastChange - b.lastChange);
+            const selectedAgent = readyAgents[0];
+            
+            // We have a waiter and an agent. 
+            // Change agent state to prevent multiple calls
+            await redis.hSet(`gescall:agent:${selectedAgent.username}`, 'state', 'RINGING');
+            
+            const waiter = waiters.shift();
+            
+            // Originate to agent
+            console.log(`[Queue] Dispatching call ${waiter.channelId} to Agent ${selectedAgent.username} (Ext: ${selectedAgent.sipExtension})`);
+            const endpoint = `PJSIP/${selectedAgent.sipExtension}`;
+            
+            const cId = waiter.phoneNumber || waiter.leadId || 'Desconocido';
+            ari.channels.originate({
+                endpoint,
+                app: 'gescall-ivr',
+                appArgs: 'dialed_agent',
+                callerId: `"${cId}" <${cId}>`,
+                variables: {
+                    'waiter_channel': waiter.channelId,
+                    'campaign_id': campaignId,
+                    'agent_username': selectedAgent.username
+                }
+            }).catch(async err => {
+                console.error(`[Queue] Failed to originate to ${selectedAgent.username}:`, err.message);
+                await redis.hSet(`gescall:agent:${selectedAgent.username}`, 'state', 'READY');
+                waiters.unshift(waiter); // Put back in queue
+            });
+            
+        } catch (err) {
+            console.error(`[Queue] Dispatch error for campaign ${campaignId}:`, err.message);
+        }
     }
 }
 
@@ -196,6 +302,53 @@ async function handleStasisStart(event, channel) {
         console.log(`[ARI] Dialed channel ${channelId} entered Stasis — skipping IVR flow`);
         return;
     }
+    
+    if (appArgs.includes('dialed_agent')) {
+        // Agent answered the queue call! Bridge them with the waiting caller
+        try {
+            await channel.answer();
+            
+            try {
+                // Wait 1 second for WebRTC audio path to fully open in the browser
+                await new Promise(r => setTimeout(r, 1000));
+                
+                // Whisper: Play the new call audio to the agent
+                const playback = ari.Playback();
+                await channel.play({ media: 'sound:nueva_llamada' }, playback);
+                await new Promise((resolve) => {
+                    playback.on('PlaybackFinished', resolve);
+                    setTimeout(resolve, 6000); // 6 seconds failsafe timeout
+                });
+            } catch(e) {
+                console.error(`[Queue] Failed to play whisper to agent ${channelId}:`, e.message);
+            }
+            
+            const waiterVar = await channel.getChannelVar({ variable: 'waiter_channel' });
+            if (waiterVar && waiterVar.value) {
+                const waiterChannelId = waiterVar.value;
+                const mixingBridge = await ari.bridges.create({ type: 'mixing' });
+                
+                mixingBridge.on('ChannelLeftBridge', async (event) => {
+                    console.log(`[Queue] Channel ${event.channel?.id} left bridge ${mixingBridge.id}, tearing down.`);
+                    try { await ari.channels.hangup({ channelId: channelId }); } catch (e) {}
+                    try { await ari.channels.hangup({ channelId: waiterChannelId }); } catch (e) {}
+                    try { await ari.bridges.destroy({ bridgeId: mixingBridge.id }); } catch (e) {}
+                });
+
+                await mixingBridge.addChannel({ channel: [channelId, waiterChannelId] });
+                console.log(`[Queue] Agent ${channelId} bridged with Waiter ${waiterChannelId}`);
+                
+                // Update agent state to ON_CALL
+                const agentVar = await channel.getChannelVar({ variable: 'agent_username' });
+                if (agentVar && agentVar.value) {
+                    await redis.hSet(`gescall:agent:${agentVar.value}`, 'state', 'ON_CALL');
+                }
+            }
+        } catch (err) {
+            console.error(`[Queue] Agent answer error:`, err.message);
+        }
+        return;
+    }
 
     try {
         // Answer the channel if not already answered
@@ -258,17 +411,49 @@ async function handleStasisStart(event, channel) {
         let altPhone = '';
         let transferNumber = '';
         let comments = '';
+        let campaignType = '';
         let phoneNumber = '';
         let customVars = {};
 
-        if (leadId > 0) {
+        try {
+            const cTypeVar = await channel.getChannelVar({ variable: 'campaign_type' });
+            if (cTypeVar && cTypeVar.value) campaignType = cTypeVar.value;
+        } catch (e) { }
+
+        // --- INBOUND DID LOOKUP ---
+        if (appArgs.includes('inbound')) {
+            const didNumber = appArgs[1] || channel.dialplan.exten || '';
+            console.log(`[ARI] Inbound call received, looking up DID: ${didNumber}`);
+            try {
+                const pg = require('../config/pgDatabase');
+                const didRes = await pg.query(
+                    'SELECT campaign_id, trunk_id FROM gescall_inbound_dids WHERE did_number = $1 AND active = true LIMIT 1',
+                    [didNumber]
+                );
+                if (didRes.rows.length > 0) {
+                    campaignId = didRes.rows[0].campaign_id;
+                    const didTrunkId = didRes.rows[0].trunk_id;
+                    campaignType = 'INBOUND';
+                    console.log(`[ARI] DID ${didNumber} mapped to Campaign ${campaignId}, Trunk ${didTrunkId}`);
+                    if (didTrunkId) customVars['trunk_id'] = didTrunkId;
+                } else {
+                    console.log(`[ARI] DID ${didNumber} not found or inactive`);
+                }
+            } catch (err) {
+                console.error(`[ARI] Error looking up DID ${didNumber}:`, err.message);
+            }
+        }
+
+        if (leadId > 0 && !campaignId) {
             if (isNative) {
                 try {
                     const pgRows = await pg.query(
                         `SELECT l.list_id, l.comments, l.phone_number, l.first_name, l.last_name,
-                                l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id
+                                l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id,
+                                camp.trunk_id
                          FROM gescall_leads l
                          LEFT JOIN gescall_lists lst ON l.list_id = lst.list_id
+                         LEFT JOIN gescall_campaigns camp ON lst.campaign_id = camp.campaign_id
                          WHERE l.lead_id = $1 LIMIT 1`, [leadId]
                     );
 
@@ -288,6 +473,7 @@ async function handleStasisStart(event, channel) {
                         if (r.tts_vars && typeof r.tts_vars === 'object') {
                             customVars = { ...r.tts_vars };
                         }
+                        if (r.trunk_id) customVars['trunk_id'] = r.trunk_id;
                     }
 
                     if (campaignId) {
@@ -406,6 +592,7 @@ async function handleStasisStart(event, channel) {
             startTime: Date.now(),
             executionLog: [], // Keep track of node executions for n8n style view
             isNative, // Flag indicating if call uses PostgreSQL
+            trunkId: customVars['trunk_id'] || null
         };
 
         // Attach custom properties as var_{PROPERTY} for replaceVars
@@ -422,8 +609,21 @@ async function handleStasisStart(event, channel) {
             io.emit('ivr:call:start', { channelId, leadId, campaignId });
         }
 
-        // Execute flow
-        if (flow && flow.nodes && flow.edges) {
+        // Execute flow or Queue
+        if (campaignType === 'OUTBOUND_PREDICTIVE' || campaignType === 'OUTBOUND_PROGRESSIVE' || campaignType === 'INBOUND') {
+            // Direct to Queue Holding Bridge
+            console.log(`[ARI] ${campaignType} call ${channelId} sending to Holding Bridge`);
+            const bridgeId = await getOrCreateBridge(campaignId);
+            if (bridgeId) {
+                await ari.bridges.addChannel({ bridgeId, channel: channelId });
+                if (!queueWaiters.has(campaignId)) queueWaiters.set(campaignId, []);
+                queueWaiters.get(campaignId).push({ channelId, joinTime: Date.now(), leadId, phoneNumber: stateObj.phone || '' });
+                // Optionally play MOH on channel
+                try { await channel.play({ media: 'sound:default' }); } catch(e){}
+            } else {
+                await channel.hangup();
+            }
+        } else if (flow && flow.nodes && flow.edges) {
             await executeFlow(channelId, flow);
         } else {
             // Default flow: play TTS from comments, wait DTMF, transfer
@@ -472,6 +672,13 @@ function handleStasisEnd(event, channel) {
                 dtmf: callState.dtmfBuffer,
                 duration: Math.floor((Date.now() - callState.startTime) / 1000),
             });
+        }
+
+        // Remove from queue if it was waiting
+        if (callState.campaignId && queueWaiters.has(callState.campaignId)) {
+            const waiters = queueWaiters.get(callState.campaignId);
+            const idx = waiters.findIndex(w => w.channelId === channelId);
+            if (idx !== -1) waiters.splice(idx, 1);
         }
 
         activeCalls.delete(channelId);
@@ -1759,18 +1966,18 @@ async function logToGescall(callState, status, dtmf, duration) {
             const pg = require('../config/pgDatabase');
             const pgUpdateResult = await pg.query(
                 `UPDATE gescall_call_log 
-                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3
-                 WHERE lead_id = $4 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
+                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4)
+                 WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
                  RETURNING log_id`,
-                [status, dtmf || '0', duration, callState.leadId]
+                [status, dtmf || '0', duration, callState.trunkId, callState.leadId]
             );
 
             if (pgUpdateResult.rowCount === 0) {
                 await pg.query(
                     `INSERT INTO gescall_call_log
-                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed)
-                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)`,
-                    [callState.leadId, phone, callState.campaignId, callState.listId, status, duration, dtmf || '0']
+                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id)
+                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8)`,
+                    [callState.leadId, phone, callState.campaignId, callState.listId, status, duration, dtmf || '0', callState.trunkId]
                 );
             }
         } else {

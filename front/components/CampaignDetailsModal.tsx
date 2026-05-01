@@ -72,6 +72,7 @@ import 'react-date-range/dist/theme/default.css';
 import { CampaignCallerIdSettings } from './CampaignCallerIdSettings';
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { CallerIDPoolsManager } from './CallerIDPoolsManager';
+import { InboundDidsManager } from './InboundDidsManager';
 
 interface Campaign {
   id: string;
@@ -85,6 +86,8 @@ interface Campaign {
   lastActivity: string;
   autoDialLevel?: string;
   maxRetries?: number;
+  campaign_type?: string;
+  trunk_id?: string | null;
 }
 
 interface CampaignDetailsModalProps {
@@ -119,20 +122,35 @@ export function CampaignDetailsModal({
   const [dialLevel, setDialLevel] = useState(campaign.autoDialLevel || "1.0");
   const [maxRetries, setMaxRetries] = useState<number>(campaign.maxRetries ?? 3);
   const [savingGeneral, setSavingGeneral] = useState(false);
+  const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
+  const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
 
   // Sync status when campaign prop changes or modal opens
   useEffect(() => {
     setCampaignStatus(campaign.status);
     setDialLevel(campaign.autoDialLevel || "1.0");
     setMaxRetries(campaign.maxRetries ?? 3);
-  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, isOpen]);
+    setSelectedTrunkId(campaign.trunk_id || '__none__');
+  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.trunk_id, isOpen]);
+
+  // Fetch trunks list once
+  useEffect(() => {
+    if (isOpen) {
+      api.getTrunks().then((resp: any) => {
+        if (Array.isArray(resp)) {
+          setAvailableTrunks(resp);
+        }
+      }).catch(() => {});
+    }
+  }, [isOpen]);
 
   const handleSaveGeneralSettings = async () => {
     setSavingGeneral(true);
     try {
       await Promise.all([
         api.updateCampaignDialLevel(campaign.id, dialLevel),
-        api.updateCampaignRetries(campaign.id, maxRetries)
+        api.updateCampaignRetries(campaign.id, maxRetries),
+        api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId)
       ]);
       toast.success("Configuración general guardada correctamente");
     } catch (error: any) {
@@ -705,6 +723,12 @@ export function CampaignDetailsModal({
                   <Settings className="w-4 h-4" />
                   Ajustes
                 </TabsTrigger>
+                {campaign.campaign_type === 'INBOUND' && (
+                  <TabsTrigger value="dids" className="gap-2">
+                    <Phone className="w-4 h-4" />
+                    DIDs Inbound
+                  </TabsTrigger>
+                )}
               </TabsList>
             </div>
 
@@ -1237,6 +1261,46 @@ export function CampaignDetailsModal({
                         </CardContent>
                       </Card>
 
+                      {/* Card: Troncal Saliente */}
+                      <Card className="shadow-sm border-slate-200">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-violet-100 rounded-lg text-violet-600">
+                              <Activity className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <CardTitle className="text-base">Troncal de Salida</CardTitle>
+                              <CardDescription className="text-xs">Ruta por la que salen las llamadas</CardDescription>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="trunkSelectModal" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Troncal Asignada</Label>
+                            <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
+                              <SelectTrigger id="trunkSelectModal" className="font-mono text-sm h-10 w-full bg-white">
+                                <SelectValue placeholder="Sin troncal asignada" />
+                              </SelectTrigger>
+                              <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                                <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
+                                {availableTrunks.map((trunk: any) => (
+                                  <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
+                                    {trunk.trunk_name} ({trunk.trunk_id})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-[11px] text-slate-500 leading-relaxed italic mt-2">
+                              La troncal por la que se enrutarán las llamadas de esta campaña.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                    </div>
+
+                    {/* Grid segunda fila */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Card: Reintentos */}
                       <Card className="shadow-sm border-slate-200">
                         <CardHeader className="pb-3">
@@ -1303,6 +1367,12 @@ export function CampaignDetailsModal({
                     </div>
                   </div>
                 </TabsContent>
+
+                {campaign.campaign_type === 'INBOUND' && (
+                  <TabsContent value="dids" className="mt-4">
+                    <InboundDidsManager campaignId={campaign.id} />
+                  </TabsContent>
+                )}
               </div>
             </ScrollArea>
           </Tabs>

@@ -1,0 +1,136 @@
+import { useState, useEffect, useRef } from 'react';
+import { UA, WebSocketInterface } from 'jssip';
+
+export function useWebPhone(extension?: string, password?: string, wsUrl?: string) {
+  const [ua, setUa] = useState<UA | null>(null);
+  const [session, setSession] = useState<any | null>(null);
+  const [status, setStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'registered' | 'calling' | 'incall'>('disconnected');
+  const [error, setError] = useState<string | null>(null);
+  const [callerId, setCallerId] = useState<string>('');
+  const audioRef = useRef<HTMLAudioElement>(new Audio());
+
+  useEffect(() => {
+    if (!extension || !password || !wsUrl) return;
+
+    const socket = new WebSocketInterface(wsUrl);
+    const configuration = {
+      sockets: [socket],
+      uri: `sip:${extension}@${wsUrl.split('/')[2].split(':')[0]}`,
+      password: password,
+      register: true
+    };
+
+    const newUa = new UA(configuration);
+
+    newUa.on('connecting', () => setStatus('connecting'));
+    newUa.on('connected', () => setStatus('connected'));
+    newUa.on('disconnected', () => setStatus('disconnected'));
+    newUa.on('registered', () => setStatus('registered'));
+    newUa.on('registrationFailed', (e) => {
+      console.error('Registration failed', e);
+      setError('Error de registro SIP');
+    });
+
+    newUa.on('newRTCSession', (e) => {
+      const newSession = e.session;
+      
+      newSession.on('progress', () => setStatus('calling'));
+      const setAudioStream = () => {
+        const stream = newSession.connection?.getReceivers().find(r => r.track?.kind === 'audio')?.track;
+        if (stream && audioRef.current) {
+          const currentStream = audioRef.current.srcObject as MediaStream;
+          if (!currentStream || currentStream.getTracks()[0] !== stream) {
+            audioRef.current.srcObject = new MediaStream([stream]);
+            audioRef.current.play().catch(console.error);
+          }
+        }
+      };
+
+      newSession.on('confirmed', () => {
+        setStatus('incall');
+        setAudioStream();
+      });
+
+      if (newSession.connection) {
+        newSession.connection.addEventListener('track', setAudioStream);
+        setAudioStream(); // Check immediately for incoming calls
+      }
+      newSession.on('ended', () => {
+        setSession(null);
+        setStatus('registered');
+      });
+      newSession.on('failed', () => {
+        setSession(null);
+        setStatus('registered');
+      });
+
+      if (e.originator === 'remote') {
+        const remoteId = newSession.remote_identity?.uri?.user || 'Desconocido';
+        setCallerId(remoteId);
+
+        // Handle incoming call - auto answer for agents
+        setSession(newSession);
+        setStatus('calling');
+        
+        // Auto-answer almost immediately
+        setTimeout(() => {
+          newSession.answer({
+            mediaConstraints: { audio: true, video: false }
+          });
+          setStatus('incall');
+        }, 500);
+      }
+    });
+
+    newUa.start();
+    setUa(newUa);
+
+    return () => {
+      newUa.stop();
+    };
+  }, [extension, password, wsUrl]);
+
+  const call = (target: string) => {
+    if (ua && target) {
+      const eventHandlers = {
+        progress: () => setStatus('calling'),
+        confirmed: () => setStatus('incall'),
+        ended: () => { setSession(null); setStatus('registered'); },
+        failed: () => { setSession(null); setStatus('registered'); }
+      };
+      
+      const options = {
+        eventHandlers,
+        mediaConstraints: { audio: true, video: false }
+      };
+      
+      const newSession = ua.call(`sip:${target}@${wsUrl!.split('/')[2].split(':')[0]}`, options);
+      setSession(newSession as any);
+    }
+  };
+
+  const answer = () => {
+    if (session) {
+      session.answer({
+        mediaConstraints: { audio: true, video: false }
+      });
+    }
+  };
+
+  const hangup = () => {
+    if (session) {
+      session.terminate();
+      setSession(null);
+      setStatus('registered');
+    }
+  };
+
+  const mute = (isMuted: boolean) => {
+    if (session) {
+      if (isMuted) session.mute();
+      else session.unmute();
+    }
+  };
+
+  return { status, error, call, answer, hangup, mute, session, audioRef, callerId };
+}

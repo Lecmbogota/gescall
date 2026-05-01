@@ -1,400 +1,180 @@
 const express = require('express');
 const router = express.Router();
-const vicidialApi = require('../services/vicidialApi');
-const databaseService = require('../services/databaseService');
+const pg = require('../config/pgDatabase');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { generateToken } = require('../middleware/jwtAuth');
 
 // Generate ephemeral RSA keypair for client-side encryption
 const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
 });
 
-console.log('[Auth] RSA key pair generated');
+console.log('[Auth-PG] RSA key pair generated');
 
-// GET /api/auth/pubkey - expose public key for encryption
 router.get('/pubkey', (req, res) => {
-  return res.json({ success: true, publicKey });
+    return res.json({ success: true, publicKey });
 });
 
-// POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { agent_user, password, agent_user_enc, password_enc } = req.body;
+    const { agent_user, password, agent_user_enc, password_enc } = req.body;
 
-  if (!agent_user && !agent_user_enc) {
-    return res.status(400).json({ success: false, error: 'agent_user is required' });
-  }
+    let agentUser = agent_user || null;
+    let passwordPlain = password || null;
 
-  if (!password && !password_enc) {
-    return res.status(400).json({ success: false, error: 'password is required' });
-  }
-
-  // Decrypt if encrypted payload is provided
-  let agentUser = agent_user || null;
-  let passwordPlain = password || null;
-
-  try {
-    if (agent_user_enc) {
-      const decUserBuf = crypto.privateDecrypt(
-        { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
-        Buffer.from(agent_user_enc, 'base64')
-      );
-      agentUser = decUserBuf.toString('utf8');
-    }
-    if (password_enc) {
-      const decPassBuf = crypto.privateDecrypt(
-        { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
-        Buffer.from(password_enc, 'base64')
-      );
-      passwordPlain = decPassBuf.toString('utf8');
-    }
-  } catch (e) {
-    console.error('[Auth] Decryption failed:', e);
-    return res.status(400).json({ success: false, error: 'Decryption failed' });
-  }
-
-  try {
-    console.log('[Auth] ========================================');
-    console.log('[Auth] Login attempt started');
-    console.log('[Auth] User:', agentUser);
-    console.log('[Auth] Timestamp:', new Date().toISOString());
-    console.log('[Auth] ========================================');
-
-    // 1) USER DETAILS (info básica) - This validates credentials against Vicidial
-    console.log('[Auth] Step 1: Fetching user details from Vicidial...');
-    const details = await vicidialApi.request({
-      function: 'user_details',
-      agent_user: agentUser,
-      stage: 'pipe',
-      header: 'YES',
-      user: agentUser,
-      pass: passwordPlain,
-    });
-
-    if (!details.success) {
-      console.error('[Auth] ✗ Authentication failed for user:', agentUser);
-      console.error('[Auth] ✗ Vicidial response:', details.data);
-      console.error('[Auth] ========================================');
-      return res.status(401).json({
-        success: false,
-        error: details.data || 'Invalid credentials or user not found',
-        errorCode: 'AUTH_FAILED'
-      });
+    try {
+        if (agent_user_enc) {
+            const decUserBuf = crypto.privateDecrypt(
+                { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+                Buffer.from(agent_user_enc, 'base64')
+            );
+            agentUser = decUserBuf.toString('utf8');
+        }
+        if (password_enc) {
+            const decPassBuf = crypto.privateDecrypt(
+                { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+                Buffer.from(password_enc, 'base64')
+            );
+            passwordPlain = decPassBuf.toString('utf8');
+        }
+    } catch (e) {
+        return res.status(400).json({ success: false, error: 'Decryption failed' });
     }
 
-    console.log('[Auth] ✓ User details retrieved successfully');
+    try {
+        console.log(`[Auth-PG] Login attempt: ${agentUser}`);
 
-    const parsedDetails = vicidialApi.parseResponse(details.data);
-    const user = parsedDetails && parsedDetails.length ? parsedDetails[0] : null;
+        // Check against PostgreSQL native table joining with roles to get is_system flag
+        // For migration purposes, if the password matches the plain text or standard hash, we allow it.
+        const userQuery = await pg.query(`
+            SELECT u.*, r.is_system, r.role_name 
+            FROM gescall_users u 
+            LEFT JOIN gescall_roles r ON u.role_id = r.role_id
+            WHERE u.username = $1 AND u.active = true
+        `, [agentUser]);
 
-    if (!user) {
-      console.error('[Auth] No user data returned for:', agentUser);
-      return res.status(401).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-
-    // 2) CAMPAIGNS & INGROUPS (permisos de acceso)
-    console.log('[Auth] Fetching agent campaigns...');
-    const campaignsRes = await vicidialApi.request({
-      function: 'agent_campaigns',
-      agent_user: agentUser,
-      stage: 'pipe',
-      header: 'YES',
-      user: agentUser,
-      pass: passwordPlain,
-    });
-
-    let campaigns = [];
-    let ingroups = [];
-    let campaignsDetailed = [];
-
-    if (campaignsRes.success) {
-      const parsed = vicidialApi.parseResponse(campaignsRes.data);
-      console.log('[Auth] ========================================');
-      console.log('[Auth] Raw agent campaigns response:', campaignsRes.data);
-      console.log('[Auth] Parsed agent campaigns:', JSON.stringify(parsed, null, 2));
-      console.log('[Auth] ========================================');
-
-      if (parsed && parsed.length) {
-        const row = parsed[0];
-        const campaignStr = row.allowed_campaigns_list || '';
-        const ingroupStr = row.allowed_ingroups_list || '';
-
-        console.log('[Auth] Campaign string from Vicidial:', campaignStr);
-        console.log('[Auth] Ingroup string from Vicidial:', ingroupStr);
-
-        campaigns = campaignStr ? campaignStr.split('-').filter(Boolean) : [];
-        ingroups = ingroupStr ? ingroupStr.split('-').filter(Boolean) : [];
-
-        console.log('[Auth] Parsed campaigns array:', campaigns);
-        console.log('[Auth] Parsed ingroups array:', ingroups);
-
-        // Fetch actual campaign names from database
-        try {
-          const placeholders = campaigns.map(() => '?').join(',');
-          const campaignRows = await databaseService.executeQuery(
-            `SELECT campaign_id, campaign_name FROM vicidial_campaigns WHERE campaign_id IN (${placeholders})`,
-            campaigns
-          );
-          const nameMap = {};
-          for (const row of campaignRows) {
-            nameMap[row.campaign_id] = row.campaign_name;
-          }
-          campaignsDetailed = campaigns.map(campaignId => ({
-            id: campaignId,
-            name: nameMap[campaignId] || campaignId,
-            active: true
-          }));
-        } catch (nameErr) {
-          console.warn('[Auth] Could not fetch campaign names:', nameErr.message);
-          campaignsDetailed = campaigns.map(campaignId => ({
-            id: campaignId,
-            name: campaignId,
-            active: true
-          }));
+        if (userQuery.rows.length === 0) {
+            return res.status(401).json({ success: false, error: 'User not found' });
         }
 
-        console.log('[Auth] Detailed campaigns:', JSON.stringify(campaignsDetailed, null, 2));
-      }
-    } else {
-      console.warn('[Auth] Failed to fetch agent campaigns:', campaignsRes.data);
+        const user = userQuery.rows[0];
+
+        // Verify password: support bcrypt hashes AND plain-text migration
+        let passwordValid = false;
+        if (user.password_hash.startsWith('$2a$') || user.password_hash.startsWith('$2b$')) {
+            // bcrypt hash
+            passwordValid = await bcrypt.compare(passwordPlain, user.password_hash);
+        } else {
+            // Plain text (legacy) — auto-upgrade to bcrypt on success
+            passwordValid = (user.password_hash === passwordPlain);
+            if (passwordValid) {
+                const hashed = await bcrypt.hash(passwordPlain, 10);
+                await pg.query('UPDATE gescall_users SET password_hash = $1 WHERE user_id = $2', [hashed, user.user_id]);
+                console.log(`[Auth-PG] Auto-upgraded password to bcrypt for ${agentUser}`);
+            }
+        }
+
+        if (!passwordValid) {
+            return res.status(401).json({ success: false, error: 'Invalid password' });
+        }
+
+        // Get assigned campaigns
+        let campaigns = [];
+        let campaignsDetailed = [];
+
+        if (user.is_system) {
+            // System roles (SUPER-ADMIN, ADMINISTRADOR) see all active campaigns
+            const campQuery = await pg.query('SELECT campaign_id, campaign_name, active FROM gescall_campaigns');
+            campaigns = campQuery.rows.map(c => c.campaign_id);
+            campaignsDetailed = campQuery.rows.map(c => ({
+                id: c.campaign_id,
+                name: c.campaign_name,
+                active: c.active
+            }));
+        } else {
+            // Agents/Managers only see assigned campaigns
+            const campQuery = await pg.query(`
+                SELECT c.campaign_id, c.campaign_name, c.active 
+                FROM gescall_campaigns c
+                JOIN gescall_user_campaigns uc ON c.campaign_id = uc.campaign_id
+                WHERE uc.user_id = $1
+            `, [user.user_id]);
+            campaigns = campQuery.rows.map(c => c.campaign_id);
+            campaignsDetailed = campQuery.rows.map(c => ({
+                id: c.campaign_id,
+                name: c.campaign_name,
+                active: c.active
+            }));
+        }
+
+        // Fetch Role Permissions
+        const permQuery = await pg.query('SELECT permission FROM gescall_role_permissions WHERE role_id = $1', [user.role_id]);
+        const permissionsList = permQuery.rows.map(r => r.permission);
+
+        const userInfo = {
+            timestamp: new Date().toISOString(),
+            agent_user: agentUser,
+            user: {
+                id: user.username,
+                name: user.username,
+                group: user.role_name,
+                role_id: user.role_id,
+                level: user.is_system ? 9 : 1,
+                active: user.active,
+                is_system: user.is_system,
+                sip_extension: user.sip_extension,
+                sip_password: user.sip_password
+            },
+            campaigns: campaignsDetailed,
+            permissions: {
+                user_group: user.role_name,
+                role_id: user.role_id,
+                user_level: user.is_system ? 9 : 1,
+                active: user.active,
+                campaigns,
+                ingroups: [],
+                granted: permissionsList
+            },
+            isLogged: true
+        };
+
+        // Generate JWT token
+        const token = generateToken(user);
+
+        console.log(`[Auth-PG] Login successful for ${agentUser}`);
+        return res.json({ success: true, token, ...userInfo });
+    } catch (err) {
+        console.error('[Auth-PG] Error:', err);
+        return res.status(500).json({ success: false, error: 'Internal server error' });
     }
-
-    // WORKAROUND: If user is admin (level 9) and has no campaigns, fetch all campaigns from DB
-    const userLevel = user?.user_level ? Number(user.user_level) : 0;
-    if (userLevel === 9 && campaigns.length === 0) {
-      console.log('[Auth] ⚠️ Admin user with no campaigns assigned in Vicidial');
-      console.log('[Auth] 🔧 Fetching all campaigns from database as workaround...');
-
-      try {
-        const allCampaigns = await databaseService.getAllCampaigns();
-        campaigns = allCampaigns.map(c => c.campaign_id);
-        campaignsDetailed = allCampaigns.map(c => ({
-          id: c.campaign_id,
-          name: c.campaign_name || c.campaign_id,
-          active: c.active === 'Y'
-        }));
-
-        console.log('[Auth] ✓ Loaded all campaigns from database:', campaigns.length);
-        console.log('[Auth] ✓ Campaign IDs:', campaigns.join(', '));
-      } catch (err) {
-        console.error('[Auth] ✗ Failed to fetch campaigns from database:', err);
-      }
-    }
-
-    // 3) USER GROUP STATUS (más detalles de permisos)
-    let userGroupStatus = null;
-
-    if (user?.user_group) {
-      const ugRes = await vicidialApi.request({
-        function: 'user_group_status',
-        user_groups: user.user_group,
-        stage: 'pipe',
-        header: 'YES',
-        user: agentUser,
-        pass: passwordPlain,
-      });
-      if (ugRes.success) {
-        const parsedUG = vicidialApi.parseResponse(ugRes.data);
-        userGroupStatus = parsedUG && parsedUG.length ? parsedUG : null;
-      }
-    }
-
-    // 4) INGROUP STATUS
-    let inGroupStatus = null;
-
-    if (ingroups.length > 0) {
-      const igRes = await vicidialApi.request({
-        function: 'in_group_status',
-        in_groups: ingroups.join('-'),
-        stage: 'pipe',
-        header: 'YES',
-        user: agentUser,
-        pass: passwordPlain,
-      });
-      if (igRes.success) {
-        inGroupStatus = vicidialApi.parseResponse(igRes.data);
-      }
-    }
-
-    // 5) AGENT STATUS (sesión actual, IP, estado en tiempo real)
-    let agentStatus = null;
-    let agentStatusError = null;
-    const agentStatusRes = await vicidialApi.request({
-      function: 'agent_status',
-      agent_user: agentUser,
-      stage: 'pipe',
-      header: 'YES',
-      include_ip: 'YES',
-      user: agentUser,
-      pass: passwordPlain,
-    });
-    if (agentStatusRes.success) {
-      const parsed = vicidialApi.parseResponse(agentStatusRes.data);
-      agentStatus = parsed && parsed.length ? parsed[0] : null;
-    } else {
-      agentStatusError = agentStatusRes.data || 'AGENT_STATUS_UNAVAILABLE';
-    }
-
-    // 6) LOGGED IN AGENTS (si el agente está logueado en alguna campaña)
-    let loggedInAgent = null;
-    const loggedRes = await vicidialApi.request({
-      function: 'logged_in_agents',
-      show_sub_status: 'YES',
-      stage: 'pipe',
-      header: 'YES',
-      user: agentUser,
-      pass: passwordPlain,
-    });
-    if (loggedRes.success) {
-      const parsed = vicidialApi.parseResponse(loggedRes.data);
-      loggedInAgent = parsed.find((row) => row.user === agentUser) || null;
-    }
-
-    // Armar JSON completo de información del usuario
-    const permissions = {
-      user_group: user?.user_group || null,
-      user_level: user?.user_level ? Number(user.user_level) : null,
-      active: user?.active === 'Y',
-      campaigns, // Array of campaign IDs
-      ingroups,  // Array of ingroup IDs
-    };
-
-    // Build structured user object
-    const userStructured = {
-      id: user?.user || agentUser,
-      name: user?.full_name || agentUser,
-      group: user?.user_group || null,
-      level: user?.user_level ? Number(user.user_level) : 0,
-      active: user?.active === 'Y',
-      email: user?.email || null,
-      phone_login: user?.phone_login || null,
-      user_code: user?.user_code || null,
-      territory: user?.territory || null,
-    };
-
-    const userInfo = {
-      timestamp: new Date().toISOString(),
-      agent_user: agentUser,
-
-      // Structured user data for easy access
-      user: userStructured,
-
-      // Detailed campaigns with objects (as requested)
-      campaigns: campaignsDetailed,
-
-      // Complete permissions object
-      permissions,
-
-      // Raw Vicidial user data (for backwards compatibility)
-      vicidialUser: user,
-
-      // Additional status information
-      userGroupStatus,
-      inGroupStatus,
-      agentStatus,
-      agentStatusError,
-      loggedInAgent,
-
-      // Helper flag
-      isLogged: true,
-    };
-
-    console.log('[Auth] ✓ Login successful for user:', agentUser);
-    console.log('[Auth] ✓ User level:', user.user_level);
-    console.log('[Auth] ✓ Campaigns:', campaigns.join(', '));
-    console.log('[Auth] ✓ User Info JSON:', JSON.stringify(userInfo, null, 2));
-
-    return res.json({ success: true, ...userInfo });
-  } catch (error) {
-    console.error('[Auth] ========================================');
-    console.error('[Auth] ✗ CRITICAL ERROR during login');
-    console.error('[Auth] ✗ User:', agentUser);
-    console.error('[Auth] ✗ Error:', error.message);
-    console.error('[Auth] ✗ Stack:', error.stack);
-    console.error('[Auth] ========================================');
-
-    // Check if it's a Vicidial API error
-    if (error.message && error.message.includes('ECONNREFUSED')) {
-      return res.status(502).json({
-        success: false,
-        error: 'Cannot connect to Vicidial server',
-        errorCode: 'VICIDIAL_UNAVAILABLE'
-      });
-    }
-
-    if (error.message && error.message.includes('timeout')) {
-      return res.status(504).json({
-        success: false,
-        error: 'Vicidial server timeout',
-        errorCode: 'VICIDIAL_TIMEOUT'
-      });
-    }
-
-    // Generic internal error
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Internal server error',
-      errorCode: 'INTERNAL_ERROR'
-    });
-  }
 });
 
-/**
- * POST /api/auth/verify
- * Verify if a session is still valid by checking against Vicidial
- */
 router.post('/verify', async (req, res) => {
-  try {
-    const { agent_user, password } = req.body;
+    const { agent_user } = req.body;
 
-    if (!agent_user || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing credentials',
-      });
+    // If a token is provided in Authorization header, verify it
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const jwt = require('jsonwebtoken');
+        try {
+            const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
+            return res.json({ success: true, valid: true, user: decoded });
+        } catch (err) {
+            return res.json({ success: false, valid: false, error: 'Token expired or invalid' });
+        }
     }
 
-    // Verify credentials against Vicidial
-    const details = await vicidialApi.request({
-      function: 'user_details',
-      agent_user: agent_user,
-      stage: 'pipe',
-      header: 'YES',
-      user: agent_user,
-      pass: password,
-    });
-
-    if (!details.success) {
-      return res.status(401).json({
-        success: false,
-        error: 'Session invalid',
-      });
+    // Legacy: verify by username
+    if (!agent_user) return res.status(400).json({ success: false });
+    try {
+        const userQuery = await pg.query('SELECT * FROM gescall_users WHERE username = $1 AND active = true', [agent_user]);
+        if (userQuery.rows.length === 0) return res.json({ success: false, valid: false });
+        res.json({ success: true, valid: true });
+    } catch (err) {
+        res.status(500).json({ success: false });
     }
-
-    const parsedDetails = vicidialApi.parseResponse(details.data);
-    if (!parsedDetails || parsedDetails.length === 0) {
-      return res.status(401).json({
-        success: false,
-        error: 'User not found',
-      });
-    }
-
-    res.json({
-      success: true,
-      valid: true,
-    });
-
-  } catch (error) {
-    console.error('[Auth] Verify error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Verification failed',
-    });
-  }
 });
 
 module.exports = router;

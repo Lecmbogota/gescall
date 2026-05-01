@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import api from "@/services/api";
+import { io } from "socket.io-client";
 import { AreaChart, Area, Tooltip as RechartsTooltip, ResponsiveContainer, YAxis } from "recharts";
 import {
     Tabs,
@@ -85,7 +86,9 @@ import {
     GripVertical,
     User,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    ArrowRight,
+    X
 } from "lucide-react";
 import { UploadWizardContent } from "./UploadWizardContent";
 import { toast } from "sonner";
@@ -108,6 +111,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getDetailDisplayStatus, translateLeadStatus } from "@/utils/callStatusUtils";
 import socketService from "@/services/socket";
 import { CallerIDPoolsManager } from './CallerIDPoolsManager';
+import { InboundDidsManager } from './InboundDidsManager';
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatForBackendAPI, formatToGlobalTimezone } from "@/lib/dateUtils";
 
@@ -176,6 +180,8 @@ interface Campaign {
     ttsTemplates?: { id: string; name: string; content: string }[];
     retrySettings?: Record<string, number>;
     altPhoneEnabled?: boolean;
+    campaign_type?: string;
+    trunk_id?: string | null;
 }
 
 interface CampaignDetailPageProps {
@@ -228,7 +234,7 @@ export function CampaignDetailPage({
     onUpdateCampaign,
 }: CampaignDetailPageProps) {
     const timezone = useSettingsStore((state) => state.timezone);
-    const [activeTab, setActiveTab] = useState("reports");
+    const [activeTab, setActiveTab] = useState(campaign.campaign_type === 'BLASTER' ? "reports" : "monitor");
     const [campaignStatus, setCampaignStatus] = useState(campaign.status);
     const [isToggling, setIsToggling] = useState(false);
     const [dialLevel, setDialLevel] = useState(campaign.autoDialLevel || "1.0");
@@ -247,6 +253,17 @@ export function CampaignDetailPage({
     const [activeSince, setActiveSince] = useState<string | null>(null);
     const [activeTimer, setActiveTimer] = useState<string>('00:00:00');
     const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+    const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
+    const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
+
+    // Fetch trunks list
+    useEffect(() => {
+        api.getTrunks().then((resp: any) => {
+            if (Array.isArray(resp)) {
+                setAvailableTrunks(resp);
+            }
+        }).catch(() => {});
+    }, []);
 
     // Structure Schema State
     const [structureSchema, setStructureSchema] = useState<{name: string; required: boolean; is_phone?: boolean}[]>(
@@ -407,9 +424,11 @@ export function CampaignDetailPage({
         const origFailed = campaign.retrySettings?.FAILED ?? 30;
         if (retryGroups.FalloTecnico.enabled !== (origFailed >= 0)) return true;
         if (retryGroups.FalloTecnico.minutes !== Math.max(origFailed, 1)) return true;
+
+        if ((selectedTrunkId === '__none__' ? '' : selectedTrunkId) !== (campaign.trunk_id || '')) return true;
         
         return false;
-    }, [dialLevel, maxRetries, retryGroups, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings]);
+    }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id]);
 
     const handleSaveGeneralSettings = async () => {
         setSavingGeneral(true);
@@ -427,7 +446,8 @@ export function CampaignDetailPage({
             await Promise.all([
                 api.updateCampaignDialLevel(campaign.id, dialLevel),
                 api.updateCampaignRetries(campaign.id, maxRetries),
-                api.updateCampaignRetrySettings(campaign.id, expandedRetrySettings)
+                api.updateCampaignRetrySettings(campaign.id, expandedRetrySettings),
+                api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId)
             ]);
             toast.success("Configuración general guardada correctamente");
             if (onUpdateCampaign) onUpdateCampaign();
@@ -539,6 +559,13 @@ export function CampaignDetailPage({
     );
     const [selectedTtsTemplate, setSelectedTtsTemplate] = useState<{ id: string; name: string; content: string } | null>(null);
     const [isSavingTts, setIsSavingTts] = useState(false);
+
+    // Agents state
+    const [campaignAgents, setCampaignAgents] = useState<string[]>([]);
+    const [agentSearchTerm, setAgentSearchTerm] = useState("");
+    const [allAgents, setAllAgents] = useState<{username: string, name: string}[]>([]);
+    const [loadingAgents, setLoadingAgents] = useState(false);
+    const [savingAgents, setSavingAgents] = useState(false);
 
     // Vicidial status color mapping
     const getDialStatusColor = (status: string) => {
@@ -743,6 +770,73 @@ export function CampaignDetailPage({
         setDisplayedRecords(100);
     }, [searchTerm, statusFilter, listFilter]);
 
+    // Function to fetch agents
+    const fetchAgents = async () => {
+        setLoadingAgents(true);
+        try {
+            const promises: Promise<any>[] = [
+                api.getUsers(),
+                api.getCampaignAgents(campaign.id)
+            ];
+            // Fetch agent real-time status for all applicable campaigns
+            if (campaign.campaign_type !== 'BLASTER') {
+                promises.push(api.getCampaignAgentStatuses(campaign.id));
+            }
+            const [usersRes, campAgentsRes, statusRes] = await Promise.all(promises);
+
+            let statuses = [];
+            if (statusRes && statusRes.success) {
+                statuses = statusRes.agents;
+            }
+
+            if (usersRes.success) {
+                const agents = (usersRes.data || []).filter((u: any) => u.active === 'Y' || u.active === true || u.active === 't');
+                setAllAgents(agents.map((u: any) => {
+                    const statusObj = statuses.find((s: any) => s.username === u.username);
+                    return { 
+                        username: u.username, 
+                        name: u.full_name || u.username,
+                        state: statusObj ? statusObj.state : 'OFFLINE',
+                        lastChange: statusObj ? statusObj.lastChange : 0
+                    };
+                }));
+            }
+            if (campAgentsRes.success) {
+                setCampaignAgents(campAgentsRes.agents || []);
+            }
+        } catch (err) {
+            console.error("Error fetching agents:", err);
+            toast.error("Error al cargar los agentes");
+        } finally {
+            setLoadingAgents(false);
+        }
+    };
+
+    const handleSaveAgents = async () => {
+        setSavingAgents(true);
+        try {
+            const res = await api.assignCampaignAgents(campaign.id, campaignAgents);
+            if (res.success) {
+                toast.success("Agentes actualizados correctamente");
+                if (onUpdateCampaign) onUpdateCampaign();
+            } else {
+                toast.error("Error al actualizar agentes");
+            }
+        } catch (err: any) {
+            toast.error(err.message || "Error al actualizar agentes");
+        } finally {
+            setSavingAgents(false);
+        }
+    };
+
+    const toggleAgentAssignment = (username: string) => {
+        setCampaignAgents(prev => 
+            prev.includes(username) 
+                ? prev.filter(u => u !== username)
+                : [...prev, username]
+        );
+    };
+
     // Auto-fetch components data when campaign opens
     useEffect(() => {
         const fetchBaseStats = async () => {
@@ -756,8 +850,51 @@ export function CampaignDetailPage({
         fetchBaseStats();
         fetchCampaignLists();
         fetchDialLog();
+        fetchAgents();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [campaign.id]);
+
+    // Listen for real-time agent status updates via WebSocket
+    useEffect(() => {
+        if (campaign.campaign_type !== 'INBOUND') return;
+        
+        // Connect to the base URL
+        const backendUrl = import.meta.env.VITE_API_URL 
+            ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') 
+            : window.location.origin;
+
+        const socket = io(backendUrl, {
+            transports: ['websocket'],
+            autoConnect: true,
+        });
+
+        socket.on('dashboard:realtime:update', (data: any) => {
+            if (data && data.agent_update) {
+                setAllAgents(prev => prev.map(agent => {
+                    if (agent.username === data.agent_update.username) {
+                        return { 
+                            ...agent, 
+                            state: data.agent_update.state, 
+                            lastChange: parseInt(data.agent_update.last_change || '0') 
+                        };
+                    }
+                    return agent;
+                }));
+            }
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, [campaign.campaign_type]);
+
+    // Calculate agent duration in real-time
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+        if (campaign.campaign_type !== 'INBOUND') return;
+        const interval = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(interval);
+    }, [campaign.campaign_type]);
 
     // Timer calculation loop
     useEffect(() => {
@@ -1235,33 +1372,162 @@ export function CampaignDetailPage({
 
                         {/* Right: Tabs */}
                         <TabsList className="bg-white/60 backdrop-blur border border-white shadow-sm rounded-xl p-1 h-12 overflow-x-auto justify-start xl:justify-end self-stretch xl:self-auto max-w-full">
-                            <TabsTrigger value="reports" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                <BarChart3 className="w-4 h-4" />
-                                Gestión
-                            </TabsTrigger>
-                            <TabsTrigger value="lists" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                <List className="w-4 h-4" />
-                                Listas
+                            {campaign.campaign_type !== 'BLASTER' && (
+                                <TabsTrigger value="monitor" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <Activity className="w-4 h-4" />
+                                    Monitor
+                                </TabsTrigger>
+                            )}
+                            {campaign.campaign_type !== 'INBOUND' && (
+                                <TabsTrigger value="reports" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <BarChart3 className="w-4 h-4" />
+                                    Gestión
+                                </TabsTrigger>
+                            )}
+                            {campaign.campaign_type !== 'INBOUND' && (
+                                <TabsTrigger value="lists" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <List className="w-4 h-4" />
+                                    Listas
+                                </TabsTrigger>
+                            )}
+                            <TabsTrigger value="agents" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                <User className="w-4 h-4" />
+                                Agentes
                             </TabsTrigger>
                             <TabsTrigger value="config" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
                                 <Settings className="w-4 h-4" />
                                 Ajustes
                             </TabsTrigger>
-                            <TabsTrigger value="structure" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                <Database className="w-4 h-4" />
-                                Estructura
-                            </TabsTrigger>
-                            <TabsTrigger value="tts_templates" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                <Sparkles className="w-4 h-4" />
-                                Plantillas TTS
-                            </TabsTrigger>
+                            {campaign.campaign_type === 'INBOUND' && (
+                                <TabsTrigger value="dids" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <Phone className="w-4 h-4" />
+                                    DIDs
+                                </TabsTrigger>
+                            )}
+                            {campaign.campaign_type !== 'INBOUND' && (
+                                <>
+                                    <TabsTrigger value="structure" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                        <Database className="w-4 h-4" />
+                                        Estructura
+                                    </TabsTrigger>
+                                    <TabsTrigger value="tts_templates" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                        <Sparkles className="w-4 h-4" />
+                                        Plantillas TTS
+                                    </TabsTrigger>
+                                </>
+                            )}
                         </TabsList>
                     </div>
 
+                {/* Tab: Monitor Content */}
+                {campaign.campaign_type !== 'BLASTER' && (
+                    <TabsContent value="monitor" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
+                        <TooltipProvider delayDuration={300}>
+                            <div className="flex-1 overflow-auto bg-white/60 backdrop-blur-md rounded-2xl border border-white/80 shadow-sm p-6 relative z-0">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div>
+                                        <h2 className="text-lg font-semibold text-slate-800">Estado de Agentes (Tiempo Real)</h2>
+                                        <p className="text-sm text-slate-500 mt-1">Supervisión en vivo de la cola de agentes.</p>
+                                    </div>
+                                    <Button onClick={fetchAgents} variant="outline" size="sm" className="gap-2">
+                                        <RefreshCw className={`w-4 h-4 ${loadingAgents ? 'animate-spin' : ''}`} />
+                                        Actualizar
+                                    </Button>
+                                </div>
+
+                                <div className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold tracking-wider">
+                                            <tr>
+                                                <th className="px-6 py-4">Agente</th>
+                                                <th className="px-6 py-4">Extensión</th>
+                                                <th className="px-6 py-4">Estado</th>
+                                                <th className="px-6 py-4">Duración</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {allAgents.filter(a => campaignAgents.includes(a.username) && (a as any).state !== 'OFFLINE' && (a as any).state !== 'UNKNOWN').map(agent => {
+                                                const stateObj = agent as any; // Need to map real-time state
+                                                const state = stateObj.state;
+                                                
+                                                let rowColorClass = "bg-slate-50/40 hover:bg-slate-100/50";
+                                                let badgeClass = "bg-slate-200 text-slate-600";
+                                                let displayState = state;
+                                                
+                                                switch (state) {
+                                                    case 'READY':
+                                                    case 'WAITING':
+                                                        rowColorClass = "bg-emerald-50/60 hover:bg-emerald-100/60";
+                                                        badgeClass = "bg-emerald-200 text-emerald-800";
+                                                        displayState = 'DISPONIBLE';
+                                                        break;
+                                                    case 'ON_CALL':
+                                                    case 'INCALL':
+                                                        rowColorClass = "bg-red-50 hover:bg-red-100";
+                                                        badgeClass = "bg-red-200 text-red-800";
+                                                        displayState = 'EN LLAMADA';
+                                                        break;
+                                                    case 'ACW':
+                                                    case 'WRAPUP':
+                                                        rowColorClass = "bg-orange-50 hover:bg-orange-100";
+                                                        badgeClass = "bg-orange-200 text-orange-800";
+                                                        displayState = 'CIERRE GESTIÓN';
+                                                        break;
+                                                    case 'PAUSED':
+                                                    case 'BREAK':
+                                                        rowColorClass = "bg-blue-50 hover:bg-blue-100";
+                                                        badgeClass = "bg-blue-200 text-blue-800";
+                                                        displayState = 'EN PAUSA';
+                                                        break;
+                                                    case 'RINGING':
+                                                        rowColorClass = "bg-purple-50 hover:bg-purple-100";
+                                                        badgeClass = "bg-purple-200 text-purple-800";
+                                                        displayState = 'TIMBRANDO';
+                                                        break;
+                                                    case 'DIALING':
+                                                        rowColorClass = "bg-cyan-50 hover:bg-cyan-100";
+                                                        badgeClass = "bg-cyan-200 text-cyan-800";
+                                                        displayState = 'MARCANDO';
+                                                        break;
+                                                    default:
+                                                        rowColorClass = "bg-slate-50 hover:bg-slate-100 text-slate-600";
+                                                        badgeClass = "bg-slate-200 text-slate-600";
+                                                        displayState = state;
+                                                }
+
+                                                return (
+                                                    <tr key={agent.username} className={`transition-colors ${rowColorClass}`}>
+                                                        <td className="px-6 py-4 font-medium text-slate-800">{agent.name}</td>
+                                                        <td className="px-6 py-4 text-slate-500">@{agent.username}</td>
+                                                        <td className="px-6 py-4">
+                                                            <span className={`px-2.5 py-1 rounded-full text-[11px] uppercase font-bold tracking-wider ${badgeClass}`}>
+                                                                {displayState}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 font-mono text-slate-600">
+                                                            {stateObj.lastChange ? formatDuration(Math.floor((now - stateObj.lastChange) / 1000)) : '-'}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                            {allAgents.filter(a => campaignAgents.includes(a.username) && (a as any).state !== 'OFFLINE' && (a as any).state !== 'UNKNOWN').length === 0 && (
+                                                <tr>
+                                                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500 italic">No hay agentes conectados o en turno en esta campaña.</td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </TooltipProvider>
+                    </TabsContent>
+                )}
+
                 {/* Tab: Reportes Content */}
-                <TabsContent value="reports" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
-                    <TooltipProvider delayDuration={300}>
-                        {/* Filters Row (Clean, unified design) */}
+                {campaign.campaign_type !== 'INBOUND' && (
+                    <TabsContent value="reports" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
+                        <TooltipProvider delayDuration={300}>
+                        <>
                         <div className="flex-shrink-0 flex flex-wrap xl:flex-nowrap items-center gap-3 w-full relative z-40 p-4 border border-slate-100/50 bg-white/60 backdrop-blur-md rounded-[20px] shadow-sm">
                             
                             {/* Buscar: Elastic Pill (Stretches to fill empty space) */}
@@ -1474,10 +1740,12 @@ export function CampaignDetailPage({
                                 {filteredRecords.length !== dialLogData.length && ` (${dialLogData.length.toLocaleString()} total)`}
                             </span>
                             {hasMore && <span>Desplázate para cargar más...</span>}
-                    </div>
                         </div>
+                        </div>
+                        </>
                     </TooltipProvider>
                 </TabsContent>
+                )}
 
                 {/* Tab: Listas */}
                 <TabsContent value="lists" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
@@ -1615,6 +1883,131 @@ export function CampaignDetailPage({
                 </TabsContent>
 
                 {/* Tab: Config */}
+                <TabsContent value="agents" forceMount className="flex-1 overflow-auto bg-white/60 backdrop-blur-md rounded-2xl border border-white/80 shadow-sm p-6 mt-0 data-[state=inactive]:hidden text-left relative z-0">
+                    <div className="max-w-4xl mx-auto space-y-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h2 className="text-lg font-semibold text-slate-800">Agentes Asignados</h2>
+                                <p className="text-sm text-slate-500 mt-1">Selecciona qué agentes podrán recibir y realizar llamadas de esta campaña.</p>
+                            </div>
+                            <Button 
+                                onClick={handleSaveAgents} 
+                                disabled={savingAgents}
+                                className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl"
+                            >
+                                {savingAgents ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                                Guardar Asignación
+                            </Button>
+                        </div>
+                        
+                        <div className="flex items-center gap-4">
+                            <div className="relative flex-1">
+                                <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                                <Input 
+                                    placeholder="Buscar agente por nombre o usuario..." 
+                                    className="pl-9 w-full bg-white border-slate-200"
+                                    value={agentSearchTerm}
+                                    onChange={(e) => setAgentSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        {loadingAgents ? (
+                            <div className="flex justify-center p-12">
+                                <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {/* NO ASIGNADOS */}
+                                <div className="border border-slate-200 rounded-xl bg-white flex flex-col shadow-sm">
+                                    <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex justify-between items-center rounded-t-xl">
+                                        <h3 className="font-semibold text-slate-700">Disponibles</h3>
+                                        <span className="bg-slate-200 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
+                                            {allAgents.filter(a => !campaignAgents.includes(a.username)).length}
+                                        </span>
+                                    </div>
+                                    <div className="flex-1 h-[400px] overflow-y-auto p-2">
+                                        {allAgents
+                                            .filter(agent => !campaignAgents.includes(agent.username))
+                                            .filter(agent => 
+                                                agent.name.toLowerCase().includes(agentSearchTerm.toLowerCase()) || 
+                                                agent.username.toLowerCase().includes(agentSearchTerm.toLowerCase())
+                                            )
+                                            .map(agent => (
+                                                <div 
+                                                    key={agent.username}
+                                                    onClick={() => toggleAgentAssignment(agent.username)}
+                                                    className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors border border-transparent hover:border-slate-200 group"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
+                                                            <User className="w-4 h-4 text-slate-400" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-slate-800 text-sm">{agent.name}</p>
+                                                            <p className="text-xs text-slate-500">@{agent.username}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-slate-300 group-hover:text-blue-500 px-2 transition-colors">
+                                                        <ArrowRight className="w-4 h-4" />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {allAgents.filter(agent => !campaignAgents.includes(agent.username)).length === 0 && (
+                                                <div className="text-center p-8 text-slate-400 italic text-sm">
+                                                    No hay agentes disponibles
+                                                </div>
+                                            )}
+                                    </div>
+                                </div>
+
+                                {/* ASIGNADOS */}
+                                <div className="border border-blue-200 rounded-xl bg-white flex flex-col shadow-sm">
+                                    <div className="bg-blue-50 border-b border-blue-100 px-4 py-3 flex justify-between items-center rounded-t-xl">
+                                        <h3 className="font-semibold text-blue-800">Asignados a la campaña</h3>
+                                        <span className="bg-blue-200 text-blue-800 text-xs font-bold px-2 py-0.5 rounded-full">
+                                            {campaignAgents.length}
+                                        </span>
+                                    </div>
+                                    <div className="flex-1 h-[400px] overflow-y-auto p-2">
+                                        {allAgents
+                                            .filter(agent => campaignAgents.includes(agent.username))
+                                            .filter(agent => 
+                                                agent.name.toLowerCase().includes(agentSearchTerm.toLowerCase()) || 
+                                                agent.username.toLowerCase().includes(agentSearchTerm.toLowerCase())
+                                            )
+                                            .map(agent => (
+                                                <div 
+                                                    key={agent.username}
+                                                    onClick={() => toggleAgentAssignment(agent.username)}
+                                                    className="flex items-center justify-between p-3 hover:bg-red-50 rounded-lg cursor-pointer transition-colors border border-transparent hover:border-red-100 group"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                                                            <User className="w-4 h-4 text-blue-600" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-slate-800 text-sm">{agent.name}</p>
+                                                            <p className="text-xs text-slate-500">@{agent.username}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-slate-300 group-hover:text-red-500 px-2 transition-colors">
+                                                        <X className="w-4 h-4" />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {campaignAgents.length === 0 && (
+                                                <div className="text-center p-8 text-slate-400 italic text-sm">
+                                                    Ningún agente asignado
+                                                </div>
+                                            )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </TabsContent>
+
                 <TabsContent value="config" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden" >
                     <div className="space-y-6">
                         
@@ -1662,6 +2055,40 @@ export function CampaignDetailPage({
                                                 </div>
                                             </div>
                                         )}
+                                    </CardContent>
+                                </Card>
+
+                                {/* Card: Troncal de Salida */}
+                                <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 mt-4">
+                                    <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-violet-100 rounded-lg text-violet-600">
+                                                <Network className="w-4 h-4" />
+                                            </div>
+                                            <div>
+                                                <CardTitle className="text-sm font-semibold">Troncal de Salida</CardTitle>
+                                                <CardDescription className="text-xs">Ruta por la que salen las llamadas</CardDescription>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="p-5">
+                                        <div className="w-full">
+                                            <Label htmlFor="trunkSelect" className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">Troncal Asignada</Label>
+                                            <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
+                                                <SelectTrigger id="trunkSelect" className="font-mono text-sm h-11 w-full bg-white shadow-sm">
+                                                    <SelectValue placeholder="Sin troncal asignada" />
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                                                    <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
+                                                    {availableTrunks.map((trunk: any) => (
+                                                        <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
+                                                            {trunk.trunk_name} ({trunk.trunk_id})
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[10px] text-slate-400 mt-2 italic">La troncal por la que se enrutarán las llamadas de esta campaña.</p>
+                                        </div>
                                     </CardContent>
                                 </Card>
                             </div>
@@ -1804,6 +2231,13 @@ export function CampaignDetailPage({
                         )}
                     </div>
                 </TabsContent >
+
+                {/* Tab: DIDs (INBOUND only) */}
+                {campaign.campaign_type === 'INBOUND' && (
+                    <TabsContent value="dids" forceMount className="flex-1 overflow-auto min-h-0 mt-0 data-[state=inactive]:hidden p-1">
+                        <InboundDidsManager campaignId={campaign.id} />
+                    </TabsContent>
+                )}
 
                 {/* Tab: Estructura */}
                 <TabsContent value="structure" forceMount className="flex-1 overflow-auto min-h-0 mt-0 data-[state=inactive]:hidden p-1">
@@ -2097,26 +2531,28 @@ export function CampaignDetailPage({
 
             {/* Global Right Sidebar */}
             <div className="w-56 lg:w-64 xl:w-[320px] flex-shrink-0 flex flex-col gap-6">
-                <Button
-                    variant={campaignStatus === 'active' ? 'default' : 'destructive'}
-                    onClick={handleToggleCampaign}
-                    disabled={isToggling}
-                    className={`w-full h-12 rounded-xl shadow-sm transition-all flex justify-between items-center px-6 border-0 ${campaignStatus === 'active'
-                        ? 'bg-[#00a86b] hover:bg-[#00905a] text-white shadow-emerald-500/20'
-                        : 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20'
-                        }`}
-                >
-                    {isToggling ? (
-                        <><Loader2 className="w-5 h-5 animate-spin mx-auto" /></>
-                    ) : campaignStatus === 'active' ? (
-                        <>
-                            <span className="text-base tracking-wider font-semibold">ACTIVA</span>
-                            <span className="text-base font-mono opacity-90 tracking-widest">{activeTimer}</span>
-                        </>
-                    ) : (
-                        <span className="text-base tracking-wider font-semibold mx-auto">DETENIDA</span>
-                    )}
-                </Button>
+                {campaign.campaign_type !== 'INBOUND' && (
+                    <Button
+                        variant={campaignStatus === 'active' ? 'default' : 'destructive'}
+                        onClick={handleToggleCampaign}
+                        disabled={isToggling}
+                        className={`w-full h-12 rounded-xl shadow-sm transition-all flex justify-between items-center px-6 border-0 ${campaignStatus === 'active'
+                            ? 'bg-[#00a86b] hover:bg-[#00905a] text-white shadow-emerald-500/20'
+                            : 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20'
+                            }`}
+                    >
+                        {isToggling ? (
+                            <><Loader2 className="w-5 h-5 animate-spin mx-auto" /></>
+                        ) : campaignStatus === 'active' ? (
+                            <>
+                                <span className="text-base tracking-wider font-semibold">ACTIVA</span>
+                                <span className="text-base font-mono opacity-90 tracking-widest">{activeTimer}</span>
+                            </>
+                        ) : (
+                            <span className="text-base tracking-wider font-semibold mx-auto">DETENIDA</span>
+                        )}
+                    </Button>
+                )}
 
                 {/* Detalles de la Campaña */}
                 <Card className="flex-1 shadow-sm border border-slate-200 bg-white flex flex-col rounded-[20px] overflow-hidden min-h-0 relative z-10">
@@ -2129,35 +2565,50 @@ export function CampaignDetailPage({
                     
                     {/* Progresos Integrados */}
                     <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex flex-col gap-4">
-                        {/* Progreso Registros */}
-                        <div>
-                            <div className="flex justify-between items-center mb-2">
-                                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                                    Registros Óptimos Únicos
-                                </span>
-                                <span className="text-[11px] font-bold text-slate-700 bg-white border border-slate-200 px-1.5 py-0.5 rounded">{progressPercent}%</span>
+                        {campaign.campaign_type === 'INBOUND' ? (
+                            <div>
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                                        Cola de Llamadas Entrantes
+                                    </span>
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                    Agentes Asignados: <span className="font-semibold text-slate-700">{campaignAgents.length}</span>
+                                </div>
                             </div>
-                            <Progress value={progressPercent} className="h-1.5 mb-1.5 bg-slate-200 [&>div]:bg-slate-700" />
-                            <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium tracking-wide">
-                                <span>{dialedActiveLeads.toLocaleString()} DISCADOS</span>
-                                <span>{totalActiveLeads.toLocaleString()} TOTAL</span>
-                            </div>
-                        </div>
+                        ) : (
+                            <>
+                                {/* Progreso Registros */}
+                                <div>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                                            Registros Óptimos Únicos
+                                        </span>
+                                        <span className="text-[11px] font-bold text-slate-700 bg-white border border-slate-200 px-1.5 py-0.5 rounded">{progressPercent}%</span>
+                                    </div>
+                                    <Progress value={progressPercent} className="h-1.5 mb-1.5 bg-slate-200 [&>div]:bg-slate-700" />
+                                    <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium tracking-wide">
+                                        <span>{dialedActiveLeads.toLocaleString()} DISCADOS</span>
+                                        <span>{totalActiveLeads.toLocaleString()} TOTAL</span>
+                                    </div>
+                                </div>
 
-                        {/* Progreso Reintentos */}
-                        <div>
-                            <div className="flex justify-between items-center mb-2">
-                                <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1.5">
-                                    <Activity className="w-3.5 h-3.5 text-emerald-500" /> Agotamiento de Reintentos
-                                </span>
-                                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">{retriesProgressPercent}%</span>
-                            </div>
-                            <Progress value={Math.min(100, retriesProgressPercent)} className="h-1.5 mb-1.5 bg-slate-200 [&>div]:bg-emerald-500" />
-                            <div className="flex justify-between items-center text-[10px] text-slate-500 font-medium tracking-wide">
-                                <span>{totalAttemptsMade.toLocaleString()} MARCACIONES REALIZADAS</span>
-                                <span>{potentialTotalAttempts.toLocaleString()} LÍMITE</span>
-                            </div>
-                        </div>
+                                {/* Progreso Reintentos */}
+                                <div>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1.5">
+                                            <Activity className="w-3.5 h-3.5 text-emerald-500" /> Agotamiento de Reintentos
+                                        </span>
+                                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">{retriesProgressPercent}%</span>
+                                    </div>
+                                    <Progress value={Math.min(100, retriesProgressPercent)} className="h-1.5 mb-1.5 bg-slate-200 [&>div]:bg-emerald-500" />
+                                    <div className="flex justify-between items-center text-[10px] text-slate-500 font-medium tracking-wide">
+                                        <span>{totalAttemptsMade.toLocaleString()} MARCACIONES REALIZADAS</span>
+                                        <span>{potentialTotalAttempts.toLocaleString()} LÍMITE</span>
+                                    </div>
+                                </div>
+                            </>
+                        )}
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">

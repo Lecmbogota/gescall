@@ -29,15 +29,15 @@ type WidgetSize = "sm" | "md" | "lg" | "xl";
 const defaultLinks: QuickLink[] = [
   {
     id: "1",
-    title: "Vicidial Admin",
-    url: "https://vicidial.org/docs.php",
+    title: "Documentación Asterisk",
+    url: "https://wiki.asterisk.org/wiki/display/AST/Asterisk+16+Documentation",
     icon: "settings",
     color: "blue",
   },
   {
     id: "2",
-    title: "Documentación",
-    url: "https://vicidial.org/docs.php",
+    title: "Documentación Piper",
+    url: "https://github.com/rhasspy/piper",
     icon: "book",
     color: "green",
   },
