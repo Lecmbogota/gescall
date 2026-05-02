@@ -58,7 +58,33 @@ class PgDatabaseService {
     }
 
     async getActiveAgents() {
-        return [];
+        try {
+            // Read all agent keys from Redis
+            const keys = await redis.keys('gescall:agent:*');
+            if (!keys || keys.length === 0) return [];
+
+            const agents = [];
+            for (const key of keys) {
+                try {
+                    const data = await redis.hGetAll(key);
+                    if (!data || !data.state) continue;
+                    if (data.state === 'OFFLINE' || data.state === 'UNKNOWN') continue;
+                    const username = key.replace(/^gescall:agent:/, '');
+                    agents.push({
+                        username,
+                        state: data.state,
+                        last_change: data.last_change || '0',
+                        campaign_id: data.campaign_id || null
+                    });
+                } catch (innerErr) {
+                    // Ignore single-key errors
+                }
+            }
+            return agents;
+        } catch (error) {
+            console.error('[pgDatabaseService] Error in getActiveAgents:', error.message);
+            return [];
+        }
     }
 
     async getAllCampaigns() {

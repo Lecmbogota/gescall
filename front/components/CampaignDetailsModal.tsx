@@ -62,6 +62,8 @@ import {
   Save,
   Activity,
   Settings,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { UploadWizardContent } from "./UploadWizardContent";
 import { toast } from "sonner";
@@ -621,6 +623,7 @@ export function CampaignDetailsModal({
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const handleDeleteCampaign = async () => {
     setIsDeleting(true);
@@ -1223,149 +1226,105 @@ export function CampaignDetailsModal({
                 </TabsContent>
 
                 <TabsContent value="config" className="mt-4">
-                  <div className="space-y-6">
-                    {/* Seccion General - Grid de 2 Columnas */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Card: Nivel de Marcado */}
-                      <Card className="shadow-sm border-slate-200">
-                        <CardHeader className="pb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
-                              <Zap className="w-5 h-5" />
-                            </div>
-                            <div>
-                              <CardTitle className="text-base">Nivel de Auto-Marcación</CardTitle>
-                              <CardDescription className="text-xs">Velocidad y Ratio del marcador</CardDescription>
-                            </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="dialLevelModal" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Ratio de Marcación</Label>
-                            <Select value={dialLevel?.toString() || "1.0"} onValueChange={setDialLevel}>
-                              <SelectTrigger id="dialLevelModal" className="font-mono text-lg h-10 w-full bg-white">
-                                <SelectValue placeholder="Ratio" />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                {[1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0].map((ratio) => (
-                                  <SelectItem key={ratio} value={ratio.toFixed(1)}>
-                                    {ratio.toFixed(2).replace('.', ',')}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <p className="text-[11px] text-slate-500 leading-relaxed italic mt-2">
-                              Llamadas simultáneas por cada agente disponible.
-                            </p>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Card: Troncal Saliente */}
-                      <Card className="shadow-sm border-slate-200">
-                        <CardHeader className="pb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-violet-100 rounded-lg text-violet-600">
-                              <Activity className="w-5 h-5" />
-                            </div>
-                            <div>
-                              <CardTitle className="text-base">Troncal de Salida</CardTitle>
-                              <CardDescription className="text-xs">Ruta por la que salen las llamadas</CardDescription>
-                            </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="trunkSelectModal" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Troncal Asignada</Label>
-                            <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
-                              <SelectTrigger id="trunkSelectModal" className="font-mono text-sm h-10 w-full bg-white">
-                                <SelectValue placeholder="Sin troncal asignada" />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
-                                {availableTrunks.map((trunk: any) => (
-                                  <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
-                                    {trunk.trunk_name} ({trunk.trunk_id})
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <p className="text-[11px] text-slate-500 leading-relaxed italic mt-2">
-                              La troncal por la que se enrutarán las llamadas de esta campaña.
-                            </p>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                    </div>
-
-                    {/* Grid segunda fila */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Card: Reintentos */}
-                      <Card className="shadow-sm border-slate-200">
-                        <CardHeader className="pb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-emerald-100 rounded-lg text-emerald-600">
-                              <Repeat className="w-5 h-5" />
-                            </div>
-                            <div>
-                              <CardTitle className="text-base">Límite de Reintentos</CardTitle>
-                              <CardDescription className="text-xs">Máximo de intentos por contacto</CardDescription>
-                            </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="maxRetriesModal" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Intentos Máximos</Label>
-                            <Input
-                              id="maxRetriesModal"
-                              type="number"
-                              min="0"
-                              max="10"
-                              value={maxRetries}
-                              onChange={(e) => setMaxRetries(parseInt(e.target.value) || 0)}
-                              placeholder="Ej. 3"
-                              className="font-mono text-lg"
-                            />
-                            <p className="text-[11px] text-slate-500 leading-relaxed italic">
-                              Veces que se llamará a un número que no contesta o falla.
-                            </p>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-
-                    {/* Botón de Guardado General */}
-                    <div className="flex items-center justify-end pt-2">
-                      <Button
-                        onClick={handleSaveGeneralSettings}
-                        disabled={savingGeneral || (dialLevel === campaign.autoDialLevel && maxRetries === (campaign.maxRetries ?? 3))}
-                        className="gap-2 min-w-[200px] h-11 rounded-xl shadow-lg shadow-blue-500/10"
-                      >
-                        {savingGeneral ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Save className="w-4 h-4" />
-                        )}
-                        {savingGeneral ? "Guardando..." : "Guardar Ajustes Generales"}
-                      </Button>
-                    </div>
-
-                    {/* Separador Visual */}
-                    <div className="relative py-2">
-                      <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-slate-100"></span>
+                  <Card className="shadow-sm border-slate-200 max-w-xl">
+                    <CardHeader className="py-3 border-b border-slate-100/50">
+                      <div className="flex items-center gap-2.5">
+                        <Settings className="w-4 h-4 text-blue-600" />
+                        <div>
+                          <CardTitle className="text-sm font-semibold">Ajustes de Campaña</CardTitle>
+                          <CardDescription className="text-[11px]">Marcación, troncal y reintentos</CardDescription>
+                        </div>
                       </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-white px-4 text-slate-400 font-medium tracking-widest">Avanzado</span>
+                    </CardHeader>
+                    <CardContent className="p-4 space-y-4">
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="dialLevelModal" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider w-14 shrink-0 text-right">Ratio</Label>
+                          <Select value={dialLevel?.toString() || "1.0"} onValueChange={setDialLevel}>
+                            <SelectTrigger id="dialLevelModal" className="font-mono text-sm h-8 w-24 bg-white">
+                              <SelectValue placeholder="Ratio" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                              {[1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0].map((ratio) => (
+                                <SelectItem key={ratio} value={ratio.toFixed(1)}>
+                                  {ratio.toFixed(2).replace('.', ',')}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="trunkSelectModal" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider w-14 shrink-0 text-right">Troncal</Label>
+                          <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
+                            <SelectTrigger id="trunkSelectModal" className="font-mono text-sm h-8 w-44 bg-white">
+                              <SelectValue placeholder="Sin troncal" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                              <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
+                              {availableTrunks.map((trunk: any) => (
+                                <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
+                                  {trunk.trunk_name} ({trunk.trunk_id})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Seccion Avanzada: Pools */}
-                    <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <CallerIDPoolsManager />
-                    </div>
-                  </div>
+                      <div className="border-t border-slate-100" />
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Repeat className="w-3.5 h-3.5 text-emerald-500" />
+                          <span className="text-xs font-semibold text-slate-700">Reintentos</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="maxRetriesModal" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Máx.</Label>
+                          <Input
+                            id="maxRetriesModal"
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={maxRetries}
+                            onChange={(e) => setMaxRetries(parseInt(e.target.value) || 0)}
+                            placeholder="3"
+                            className="font-mono text-xs w-14 h-7 text-center"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-100" />
+
+                      <div>
+                        <button
+                          onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                          className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600 uppercase tracking-wider transition-colors"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          CallerID Local Presence
+                          <Badge variant="outline" className="text-[9px] bg-slate-50 ml-1">Experimental</Badge>
+                          {showAdvancedSettings ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+                      </div>
+
+                      {showAdvancedSettings && (
+                        <div className="bg-slate-50/50 rounded-lg border border-slate-200/60 p-3">
+                          <CallerIDPoolsManager />
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end pt-2 border-t border-slate-100">
+                        <Button
+                          onClick={handleSaveGeneralSettings}
+                          disabled={savingGeneral || (dialLevel === campaign.autoDialLevel && maxRetries === (campaign.maxRetries ?? 3))}
+                          className="gap-1.5 h-8 rounded-lg shadow-sm text-xs"
+                        >
+                          {savingGeneral ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                          {savingGeneral ? "Guardando..." : "Guardar"}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </TabsContent>
 
                 {campaign.campaign_type === 'INBOUND' && (

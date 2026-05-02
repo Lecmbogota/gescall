@@ -28,6 +28,7 @@ import {
   X,
   Loader2,
 } from 'lucide-react';
+import { Zap } from 'lucide-react';
 import { CampaignCard } from './CampaignCard';
 import { CampaignListView } from './CampaignListView';
 import { CampaignCompactView } from './CampaignCompactView';
@@ -58,6 +59,8 @@ interface Campaign {
   campaign_type?: string;
   agent_count?: number;
   trunk_id?: string | null;
+  moh_class?: string | null;
+  moh_custom_file?: string | null;
 }
 
 interface CampaignsProps {
@@ -83,7 +86,10 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
     auto_dial_level: '1.0',
     max_retries: 3,
     campaign_cid: '0000000000',
-    campaign_type: 'BLASTER'
+    campaign_type: 'BLASTER',
+    predictive_target_drop_rate: 0.03,
+    predictive_min_factor: 1.0,
+    predictive_max_factor: 4.0
   });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -167,7 +173,7 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 contactedLeads: progressData.avance || 0,
                 successRate: progressData.porcentaje || 0,
                 dialingMethod: camp.dial_method || 'Auto',
-                activeAgents: 0,
+                activeAgents: camp.agent_count || 0,
                 lastActivity: new Date().toISOString(),
                 hasCallerId,
                 hasBlacklist,
@@ -181,6 +187,8 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 campaign_type: camp.campaign_type || 'BLASTER',
                 agent_count: camp.agent_count || 0,
                 trunk_id: camp.trunk_id || null,
+                moh_class: camp.moh_class || null,
+                moh_custom_file: camp.moh_custom_file || null,
               };
             } catch (err) {
               console.error(`[Campaigns] Error fetching progress for ${camp.campaign_id}:`, err);
@@ -197,6 +205,9 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 autoDialLevel: '0',
                 campaign_type: camp.campaign_type || 'BLASTER',
                 agent_count: 0,
+                trunk_id: camp.trunk_id || null,
+                moh_class: camp.moh_class || null,
+                moh_custom_file: camp.moh_custom_file || null,
               };
             }
           })
@@ -311,7 +322,10 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
           auto_dial_level: '1.0',
           max_retries: 3,
           campaign_cid: '0000000000',
-          campaign_type: 'BLASTER'
+          campaign_type: 'BLASTER',
+          predictive_target_drop_rate: 0.03,
+          predictive_min_factor: 1.0,
+          predictive_max_factor: 4.0
         });
         // Close modal immediately
         setShowCreateDialog(false);
@@ -433,6 +447,53 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                   </SelectContent>
                 </Select>
               </div>
+
+              {createForm.campaign_type === 'OUTBOUND_PREDICTIVE' && (
+              <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-blue-700 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5" /> Configuración Predictiva
+                </h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Tasa Abandono Máx</label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      placeholder="0.03"
+                      value={createForm.predictive_target_drop_rate}
+                      onChange={(e) => setCreateForm(f => ({ ...f, predictive_target_drop_rate: parseFloat(e.target.value) || 0.03 }))}
+                      className="rounded-xl h-9 text-sm"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-0.5">Ej: 0.03 = 3%</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Factor Mín</label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0.5"
+                      placeholder="1.0"
+                      value={createForm.predictive_min_factor}
+                      onChange={(e) => setCreateForm(f => ({ ...f, predictive_min_factor: parseFloat(e.target.value) || 1.0 }))}
+                      className="rounded-xl h-9 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Factor Máx</label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="1.5"
+                      placeholder="4.0"
+                      value={createForm.predictive_max_factor}
+                      onChange={(e) => setCreateForm(f => ({ ...f, predictive_max_factor: parseFloat(e.target.value) || 4.0 }))}
+                      className="rounded-xl h-9 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>

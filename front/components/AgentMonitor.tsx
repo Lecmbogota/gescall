@@ -21,19 +21,36 @@ import {
   RefreshCw,
   Download,
   Settings,
+  Loader2,
 } from "lucide-react";
-import { Badge } from "./ui/badge";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "./ui/card";
-import { UserGreeting } from "./UserGreeting";
 import { AgentMonitorCard } from "./AgentMonitorCard";
 import { AgentMonitorList } from "./AgentMonitorList";
 import { AgentMonitorHeatmap } from "./AgentMonitorHeatmap";
 import { toast } from "sonner";
+import socketService from "../services/socket";
+import api from "@/services/api";
+
+const AGENT_STATE_MAP: Record<string, AgentStatus> = {
+  READY: "available",
+  WAITING: "available",
+  ON_CALL: "incall",
+  INCALL: "incall",
+  DIALING: "incall",
+  RINGING: "incall",
+  WRAPUP: "disposition",
+  ACW: "disposition",
+  PAUSED: "paused",
+  BREAK: "paused",
+  NOT_READY: "paused",
+  OFFLINE: "dead",
+  UNKNOWN: "dead",
+};
 
 export type AgentStatus =
   | "available"
@@ -45,6 +62,7 @@ export type AgentStatus =
 export interface Agent {
   id: string;
   name: string;
+  username?: string;
   extension: string;
   avatar?: string;
   email?: string;
@@ -310,39 +328,122 @@ const mockAgents: Agent[] = [
       supervisor: "Ana Martín",
     },
   },
-];
+]
+
+function mapApiAgent(api: any): Agent {
+  return {
+    id: String(api.user_id),
+    name: api.full_name || api.username,
+    username: api.username,
+    extension: api.sip_extension || 'N/A',
+    status: AGENT_STATE_MAP[api.agent_state] || 'dead',
+    campaign: api.campaigns?.[0]?.name || 'N/A',
+    timeInStatus: api.last_change ? Math.floor((Date.now() - api.last_change) / 1000) : 0,
+    todayStats: { calls: 0, talkTime: 0, pauseTime: 0, loginTime: 0 },
+    lastActivity: new Date().toISOString(),
+  };
+}
 
 export function AgentMonitor({ username }: AgentMonitorProps) {
-  const [agents, setAgents] = useState<Agent[]>(mockAgents);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
-  const [viewMode, setViewMode] = useState<
-    "grid" | "list" | "heatmap"
-  >("grid");
-  const [isAutoRefresh, setIsAutoRefresh] = useState(true);
+  const [viewMode, setViewMode] = useState<"grid" | "list" | "heatmap">("grid");
 
-  // Simular actualización en tiempo real
+  // Fetch initial agent data from REST API
   useEffect(() => {
-    if (!isAutoRefresh) return;
+    let cancelled = false;
+    const fetchAgents = async () => {
+      try {
+        const result = await api.getLoggedInAgents();
+        if (cancelled) return;
+        if (result.success && Array.isArray(result.data)) {
+          setAgents(result.data.map(mapApiAgent));
+        }
+      } catch (err) {
+        console.error('[AgentMonitor] Error fetching agents:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchAgents();
+    return () => { cancelled = true; };
+  }, []);
 
+  // Subscribe to real-time WebSocket updates
+  useEffect(() => {
+    const handleRealtimeUpdate = (data: any) => {
+      if (!data) return;
+
+      // Single agent state change (e.g. disconnect/sip-down)
+      if (data.agent_update) {
+        const upd = data.agent_update;
+        setAgents(prev => prev.map(agent => {
+          if (agent.username === upd.username) {
+            const newStatus = AGENT_STATE_MAP[upd.state] || 'dead';
+            const now = Date.now();
+            return {
+              ...agent,
+              status: newStatus,
+              timeInStatus: 0,
+              lastActivity: new Date(now).toISOString(),
+            };
+          }
+          return agent;
+        }));
+      }
+
+      // Bulk agents update from periodic 5s tick
+      if (Array.isArray(data.agents) && data.agents.length > 0) {
+        setAgents(prev => prev.map(agent => {
+          const upd = data.agents.find((a: any) => a.username === agent.username);
+          if (upd) {
+            const newStatus = AGENT_STATE_MAP[upd.state] || 'dead';
+            return {
+              ...agent,
+              status: newStatus,
+              timeInStatus: 0,
+              lastActivity: new Date().toISOString(),
+            };
+          }
+          return agent;
+        }));
+      }
+    };
+
+    socketService.on('dashboard:realtime:update', handleRealtimeUpdate);
+    return () => {
+      socketService.off('dashboard:realtime:update', handleRealtimeUpdate);
+    };
+  }, []);
+
+  // Periodic polling fallback (refreshes full list every 10s)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const result = await api.getLoggedInAgents();
+        if (result.success && Array.isArray(result.data)) {
+          setAgents(result.data.map(mapApiAgent));
+        }
+      } catch (err) {}
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Timer: increment timeInStatus every second
+  useEffect(() => {
     const interval = setInterval(() => {
-      setAgents((prevAgents) =>
-        prevAgents.map((agent) => ({
+      setAgents(prev =>
+        prev.map(agent => ({
           ...agent,
           timeInStatus: agent.timeInStatus + 1,
-          currentCall: agent.currentCall
-            ? {
-                ...agent.currentCall,
-                duration: agent.currentCall.duration + 1,
-              }
-            : undefined,
-        })),
+        }))
       );
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [isAutoRefresh]);
+  }, []);
 
   const filteredAgents = agents.filter((agent) => {
     const matchesSearch =
@@ -376,28 +477,18 @@ export function AgentMonitor({ username }: AgentMonitorProps) {
   // Menú contextual
   const monitorMenuItems = [
     {
-      label: isAutoRefresh
-        ? "Pausar Actualización"
-        : "Reanudar Actualización",
-      icon: isAutoRefresh ? (
-        <Pause className="w-4 h-4" />
-      ) : (
-        <Activity className="w-4 h-4" />
-      ),
-      action: () => {
-        setIsAutoRefresh(!isAutoRefresh);
-        toast.success(
-          isAutoRefresh
-            ? "Actualización automática pausada"
-            : "Actualización automática reanudada",
-        );
-      },
-    },
-    {
       label: "Forzar Actualización",
       icon: <RefreshCw className="w-4 h-4" />,
-      action: () => {
-        toast.success("Datos actualizados");
+      action: async () => {
+        try {
+          const result = await api.getLoggedInAgents();
+          if (result.success && Array.isArray(result.data)) {
+            setAgents(result.data.map(mapApiAgent));
+            toast.success("Agentes actualizados");
+          }
+        } catch (err) {
+          toast.error("Error al actualizar agentes");
+        }
       },
       separator: true,
     },
@@ -613,25 +704,33 @@ export function AgentMonitor({ username }: AgentMonitorProps) {
             </div>
           )}
 
-          {filteredAgents.length === 0 && (
+          {loading && (
+            <div className="text-center py-12 bg-slate-50 rounded-lg border-2 border-dashed">
+              <Loader2 className="w-12 h-12 text-slate-400 mx-auto mb-4 animate-spin" />
+              <p className="text-slate-500">
+                Cargando agentes...
+              </p>
+            </div>
+          )}
+          {!loading && filteredAgents.length === 0 && (
             <div className="text-center py-12 bg-slate-50 rounded-lg border-2 border-dashed">
               <Users className="w-12 h-12 text-slate-400 mx-auto mb-4" />
               <p className="text-slate-600">
-                No se encontraron agentes
+                {agents.length === 0
+                  ? 'No hay agentes registrados en el sistema'
+                  : 'No se encontraron agentes con los filtros actuales'}
               </p>
             </div>
           )}
         </div>
 
         {/* Auto-refresh indicator */}
-        {isAutoRefresh && (
-          <div className="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-pulse">
-            <Activity className="w-4 h-4" />
-            <span className="text-sm">
-              Actualización automática activa
-            </span>
-          </div>
-        )}
+        <div className="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-pulse">
+          <Activity className="w-4 h-4" />
+          <span className="text-sm">
+            Tiempo real activo
+          </span>
+        </div>
     </div>
   );
 }

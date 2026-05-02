@@ -42,9 +42,7 @@ export const CampaignAgentsModal: React.FC<CampaignAgentsModalProps> = ({ campai
       const assignedData = await assignedRes.json();
 
       if (usersData.success) {
-        // Filter out non-agents if necessary, but here we can just show all or filter by role === 'AGENT'
-        // For flexibility, showing all users but you can filter if needed.
-        setUsers(usersData.data);
+        setUsers((usersData.data || []).filter((u: any) => ['AGENT', 'AGENTE'].includes((u.role || '').toUpperCase())));
       }
       if (assignedData.success) {
         setAssignedAgents(assignedData.agents);

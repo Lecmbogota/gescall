@@ -123,6 +123,40 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Audio recordings don't need JWT (WaveSurfer fetches directly from browser)
+// This inline route bypasses JWT for recording file playback
+const path = require('path');
+const fs2 = require('fs');
+app.get('/api/audio/recordings/:filename', (req, res) => {
+    const { filename } = req.params;
+    if (filename.includes('/') || filename.includes('..')) {
+        return res.status(400).send('Invalid filename');
+    }
+    const recordingsPath = '/var/spool/asterisk/recording';
+    const filePath = path.join(recordingsPath, filename);
+    if (!fs2.existsSync(filePath)) {
+        return res.status(404).json({ success: false, error: 'Recording not found' });
+    }
+    const stat = fs2.statSync(filePath);
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    const range = req.headers.range;
+    if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunksize = (end - start) + 1;
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Content-Length', chunksize);
+        fs2.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+        fs2.createReadStream(filePath).pipe(res);
+    }
+});
+
 const { requireAuth } = require('./middleware/jwtAuth');
 app.use('/api', requireAuth);
 
@@ -145,6 +179,7 @@ app.use('/api/tts-nodes', ttsNodesRoutes(pgDatabase));
 app.use('/api/tickets', ticketsRoutes(io));
 app.use('/api/metrics', require('./routes/metrics'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/typifications', require('./routes/typifications'));
 
 app.get('/api/docs.json', async (req, res) => {
   try {
@@ -249,9 +284,18 @@ server.listen(PORT, () => {
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
   try { maintenance.stop(); } catch (e) { }
-  if (pgDatabase) await pgDatabase.end();
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
+  if (pgDatabase) {
+    try {
+      if (typeof pgDatabase.end === 'function') {
+        await pgDatabase.end();
+      } else if (pgDatabase.pool && typeof pgDatabase.pool.end === 'function') {
+        await pgDatabase.pool.end();
+      }
+    } catch (e) {
+      console.log('DB close warning (non-fatal):', e.message);
+    }
+  }
+  try { server.close(); } catch (e) { }
+  console.log('Server closed');
+  process.exit(0);
 });

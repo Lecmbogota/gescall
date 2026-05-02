@@ -26,6 +26,11 @@ type Campaign struct {
 	TrunkHost     string
 	TrunkPort     string
 	TrunkPrefix   string
+	// Predictive dialing config
+	PredictiveTargetDropRate  float64
+	PredictiveMinFactor       float64
+	PredictiveMaxFactor       float64
+	PredictiveAdaptIntervalMs int
 }
 
 type DialerEngine struct {
@@ -52,6 +57,10 @@ type DialerEngine struct {
 	ariDown          bool
 	ariFailCount     int
 	ariFailThreshold int // consecutive failures before tripping
+
+	// Predictive dialing engine
+	predictive      *PredictiveState
+	predictiveConfig *PredictiveConfig
 }
 
 func NewDialerEngine() *DialerEngine {
@@ -95,6 +104,7 @@ func NewDialerEngine() *DialerEngine {
 		quitChan:         make(chan struct{}),
 		ariClient:        NewARIClient(),
 		ariFailThreshold: 3,
+		predictive:       NewPredictiveState(),
 	}
 }
 
@@ -113,6 +123,7 @@ func (d *DialerEngine) Start() {
 	d.healthTicker = time.NewTicker(60 * time.Second)
 
 	go d.loop()
+	d.startPredictiveStatsLoop()
 }
 
 func (d *DialerEngine) Stop() {
@@ -258,7 +269,6 @@ func (d *DialerEngine) tick() {
 				}
 			}
 		} else if camp.CampaignType == "OUTBOUND_PREDICTIVE" || camp.CampaignType == "OUTBOUND_PROGRESSIVE" {
-			// Predictive/Progressive pacing based on Ready Agents
 			agentKeys, err := Redis.Keys(ctx, "gescall:agent:*").Result()
 			readyCount := 0
 			if err == nil {
@@ -269,20 +279,29 @@ func (d *DialerEngine) tick() {
 					}
 				}
 			}
-			
+
 			if readyCount > 0 {
-				multiplier := camp.AutoDialLevel
-				if multiplier <= 0 {
-					multiplier = 1.0 // fallback
-				}
-				targetConcurrent := int(float64(readyCount) * multiplier)
-				neededCalls := targetConcurrent - activeCount
-				if neededCalls > 0 {
-					maxToPopThisCamp = neededCalls
+				if camp.CampaignType == "OUTBOUND_PREDICTIVE" {
+					config := d.getCampaignPredictiveConfig(camp)
+					factor := d.predictive.GetFactor(camp.CampaignID, config)
+					targetConcurrent := int(float64(readyCount) * factor)
+					neededCalls := targetConcurrent - activeCount
+					if neededCalls > 0 {
+						maxToPopThisCamp = neededCalls
+					}
+				} else {
+					multiplier := camp.AutoDialLevel
+					if multiplier <= 0 {
+						multiplier = 1.0
+					}
+					targetConcurrent := int(float64(readyCount) * multiplier)
+					neededCalls := targetConcurrent - activeCount
+					if neededCalls > 0 {
+						maxToPopThisCamp = neededCalls
+					}
 				}
 			}
-			
-			// Respect global max cps per tick
+
 			if maxToPopThisCamp > d.maxCps {
 				maxToPopThisCamp = d.maxCps
 			}
@@ -336,7 +355,11 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 		SELECT 
 			c.campaign_id, c.dial_prefix, c.dial_method, c.campaign_cid, 
 			c.auto_dial_level, c.alt_phone_enabled, c.campaign_type,
-			t.trunk_id, t.provider_host, t.provider_port, t.dial_prefix AS trunk_dial_prefix
+			t.trunk_id, t.provider_host, t.provider_port, t.dial_prefix AS trunk_dial_prefix,
+			COALESCE(c.predictive_target_drop_rate, 0.03),
+			COALESCE(c.predictive_min_factor, 1.0),
+			COALESCE(c.predictive_max_factor, 4.0),
+			COALESCE(c.predictive_adapt_interval_ms, 10000)
 		FROM gescall_campaigns c
 		LEFT JOIN gescall_trunks t ON c.trunk_id = t.trunk_id
 		WHERE c.active = true 
@@ -355,7 +378,11 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 		var altPhone sql.NullBool
 		var trunkID, trunkHost, trunkDialPrefix sql.NullString
 		var trunkPort sql.NullInt64
-		if err := rows.Scan(&c.CampaignID, &prefix, &c.DialMethod, &cid, &autoDial, &altPhone, &ctype, &trunkID, &trunkHost, &trunkPort, &trunkDialPrefix); err == nil {
+		var predTargetDrop sql.NullFloat64
+		var predMinFactor sql.NullFloat64
+		var predMaxFactor sql.NullFloat64
+		var predAdaptMs sql.NullInt64
+		if err := rows.Scan(&c.CampaignID, &prefix, &c.DialMethod, &cid, &autoDial, &altPhone, &ctype, &trunkID, &trunkHost, &trunkPort, &trunkDialPrefix, &predTargetDrop, &predMinFactor, &predMaxFactor, &predAdaptMs); err == nil {
 			if prefix.Valid {
 				c.DialPrefix = prefix.String
 			}
@@ -376,6 +403,26 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 				c.CampaignType = ctype.String
 			} else {
 				c.CampaignType = "BLASTER"
+			}
+			if predTargetDrop.Valid {
+				c.PredictiveTargetDropRate = predTargetDrop.Float64
+			} else {
+				c.PredictiveTargetDropRate = 0.03
+			}
+			if predMinFactor.Valid {
+				c.PredictiveMinFactor = predMinFactor.Float64
+			} else {
+				c.PredictiveMinFactor = 1.0
+			}
+			if predMaxFactor.Valid {
+				c.PredictiveMaxFactor = predMaxFactor.Float64
+			} else {
+				c.PredictiveMaxFactor = 4.0
+			}
+			if predAdaptMs.Valid {
+				c.PredictiveAdaptIntervalMs = int(predAdaptMs.Int64)
+			} else {
+				c.PredictiveAdaptIntervalMs = 10000
 			}
 			// Per-campaign trunk (fallback to global env if not set)
 			if trunkID.Valid && trunkID.String != "" {

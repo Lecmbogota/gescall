@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import api from "@/services/api";
 import { io } from "socket.io-client";
+import JSZip from "jszip";
+import * as XLSX from "xlsx";
 import { AreaChart, Area, Tooltip as RechartsTooltip, ResponsiveContainer, YAxis } from "recharts";
 import {
     Tabs,
@@ -88,7 +90,13 @@ import {
     ChevronDown,
     ChevronUp,
     ArrowRight,
-    X
+    X,
+    Users,
+    CheckCircle2,
+    Mic,
+    HardDrive,
+    FileAudio,
+    Link2,
 } from "lucide-react";
 import { UploadWizardContent } from "./UploadWizardContent";
 import { toast } from "sonner";
@@ -106,6 +114,7 @@ import { es } from 'date-fns/locale';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import { CampaignCallerIdSettings } from './CampaignCallerIdSettings';
+import CampaignTypifications from './CampaignTypifications';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getDetailDisplayStatus, translateLeadStatus } from "@/utils/callStatusUtils";
@@ -114,6 +123,92 @@ import { CallerIDPoolsManager } from './CallerIDPoolsManager';
 import { InboundDidsManager } from './InboundDidsManager';
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatForBackendAPI, formatToGlobalTimezone } from "@/lib/dateUtils";
+import WaveSurfer from 'wavesurfer.js';
+
+const RecordingPlayer = ({ url }: { url: string }) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const wavesurferRef = useRef<WaveSurfer | null>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [isReady, setIsReady] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+
+        wavesurferRef.current = WaveSurfer.create({
+            container: containerRef.current,
+            waveColor: '#c7d2fe',
+            progressColor: '#6366f1',
+            cursorColor: '#4f46e5',
+            barWidth: 2,
+            barRadius: 3,
+            cursorWidth: 1,
+            height: 60,
+            barGap: 3,
+            url: url
+        });
+
+        wavesurferRef.current.on('ready', () => {
+            setIsReady(true);
+            wavesurferRef.current?.play();
+        });
+
+        wavesurferRef.current.on('error', (err) => {
+            console.error("WaveSurfer error:", err);
+            setErrorMsg("La grabación no está disponible o ha expirado.");
+            setIsReady(true); // To stop the spinner
+        });
+
+        wavesurferRef.current.on('play', () => setIsPlaying(true));
+        wavesurferRef.current.on('pause', () => setIsPlaying(false));
+
+        return () => {
+            if (wavesurferRef.current) {
+                wavesurferRef.current.destroy();
+            }
+        };
+    }, [url]);
+
+    const handlePlayPause = () => {
+        if (wavesurferRef.current) {
+            wavesurferRef.current.playPause();
+        }
+    };
+
+    return (
+        <div className="w-full flex flex-col items-center gap-4 px-4">
+            {errorMsg ? (
+                <div className="w-full flex flex-col items-center justify-center min-h-[60px] text-slate-500 text-sm gap-2">
+                    <XCircle className="w-6 h-6 text-red-400" />
+                    <span>{errorMsg}</span>
+                </div>
+            ) : (
+                <>
+                    <div className="w-full relative min-h-[60px]">
+                        {!isReady && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-slate-50/80 z-10 rounded-md">
+                                <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                            </div>
+                        )}
+                        <div ref={containerRef} className="w-full" />
+                    </div>
+                    
+                    <div className="flex items-center gap-4">
+                        <Button 
+                            variant="outline" 
+                            size="icon" 
+                            className="h-10 w-10 rounded-full border-indigo-200 text-indigo-600 hover:bg-indigo-50 shadow-sm"
+                            onClick={handlePlayPause}
+                            disabled={!isReady}
+                        >
+                            {isPlaying ? <PauseCircle className="w-5 h-5" /> : <PlayCircle className="w-5 h-5 ml-1" />}
+                        </Button>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
 
 const formatDuration = (seconds?: number) => {
     if (!seconds) return '00:00:00';
@@ -182,6 +277,21 @@ interface Campaign {
     altPhoneEnabled?: boolean;
     campaign_type?: string;
     trunk_id?: string | null;
+    predictive_target_drop_rate?: number;
+    predictive_min_factor?: number;
+    predictive_max_factor?: number;
+    recording_settings?: {
+        enabled?: boolean;
+        storage?: string;
+        external_type?: string;
+        host?: string;
+        port?: string;
+        username?: string;
+        access_key?: string;
+        region?: string;
+        bucket?: string;
+        filename_pattern?: string;
+    };
 }
 
 interface CampaignDetailPageProps {
@@ -212,6 +322,14 @@ interface DialLogRecord {
     agent?: string; // User agent assigned to the call
     vendor_lead_code?: string; // Vendor lead code from vicidial_list
     call_duration?: number; // Call duration in seconds from gescall_call_log
+    agentUsername?: string;
+    agent_username?: string;
+    user?: string;
+    log_id?: number;
+    recording_id?: number;
+    uniqueid?: string;
+    typification_name?: string;
+    typification_data?: Record<string, string>; // Dynamic columns from forms
     tts_vars?: any; // Dynamic columns
     attempt_number?: number;
     called_count?: number;
@@ -256,6 +374,47 @@ export function CampaignDetailPage({
     const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
     const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
 
+    // Predictive settings state
+    const [predTargetDropRate, setPredTargetDropRate] = useState<number>(campaign.predictive_target_drop_rate ?? 0.03);
+    const [predMinFactor, setPredMinFactor] = useState<number>(campaign.predictive_min_factor ?? 1.0);
+    const [predMaxFactor, setPredMaxFactor] = useState<number>(campaign.predictive_max_factor ?? 4.0);
+
+    // Recording Settings state
+    const recSettings = campaign.recording_settings || {};
+    const [recordingEnabled, setRecordingEnabled] = useState(recSettings.enabled !== false);
+    const [recordingStorage, setRecordingStorage] = useState(recSettings.storage || 'local');
+    const [recordingExternalType, setRecordingExternalType] = useState(recSettings.external_type || 'sftp');
+    const [recordingHost, setRecordingHost] = useState(recSettings.host || '');
+    const [recordingPort, setRecordingPort] = useState(recSettings.port || '22');
+    const [recordingUsername, setRecordingUsername] = useState(recSettings.username || '');
+    const [recordingPassword, setRecordingPassword] = useState('');
+    const [recordingAccessKey, setRecordingAccessKey] = useState(recSettings.access_key || '');
+    const [recordingSecretKey, setRecordingSecretKey] = useState('');
+    const [recordingRegion, setRecordingRegion] = useState(recSettings.region || 'us-east-1');
+    const [recordingBucket, setRecordingBucket] = useState(recSettings.bucket || '');
+    const [recordingFilenamePattern, setRecordingFilenamePattern] = useState(recSettings.filename_pattern || '{campaign_name}_{date}_{time}');
+    const [recordingApprovedSnapshot, setRecordingApprovedSnapshot] = useState<Record<string,string>|null>(null);
+    const [testingConnection, setTestingConnection] = useState(false);
+    const [savingRecording, setSavingRecording] = useState(false);
+    const recordingFilenameRef = useRef<HTMLInputElement>(null);
+
+    const isRecordingConnectionApproved = (() => {
+        if (!recordingApprovedSnapshot) return false;
+        if (recordingApprovedSnapshot.external_type !== recordingExternalType) return false;
+        if (recordingExternalType === 's3') {
+            return recordingApprovedSnapshot.access_key === recordingAccessKey &&
+                recordingApprovedSnapshot.secret_key === recordingSecretKey &&
+                recordingApprovedSnapshot.region === recordingRegion &&
+                recordingApprovedSnapshot.bucket === recordingBucket;
+        }
+        return recordingApprovedSnapshot.host === recordingHost &&
+            recordingApprovedSnapshot.port === recordingPort &&
+            recordingApprovedSnapshot.username === recordingUsername &&
+            recordingApprovedSnapshot.password === recordingPassword;
+    })();
+
+    const canSaveRecording = recordingStorage === 'local' || (recordingStorage === 'external' && isRecordingConnectionApproved);
+
     // Fetch trunks list
     useEffect(() => {
         api.getTrunks().then((resp: any) => {
@@ -280,7 +439,15 @@ export function CampaignDetailPage({
 
     // Dynamic Columns State
     const [tableColumns, setTableColumns] = useState<TableColumnConfig[]>(() => {
-        const defaultConfigs: TableColumnConfig[] = [
+        const defaultConfigs: TableColumnConfig[] = campaign.campaign_type === 'INBOUND' ? [
+            { id: 'sys_hora', label: 'Hora', visible: true, isSystem: true },
+            { id: 'sys_fecha', label: 'Fecha', visible: true, isSystem: true },
+            { id: 'sys_telefono', label: 'Teléfono', visible: true, isSystem: true },
+            { id: 'sys_agente', label: 'Agente Asignado', visible: true, isSystem: true },
+            { id: 'sys_estado', label: 'Estado', visible: true, isSystem: true },
+            { id: 'sys_duracion', label: 'Duración', visible: true, isSystem: true },
+            { id: 'sys_grabacion', label: 'Grabación', visible: true, isSystem: true },
+        ] : [
             { id: 'sys_hora', label: 'Hora', visible: true, isSystem: true },
             { id: 'sys_fecha', label: 'Fecha', visible: true, isSystem: true },
             { id: 'sys_estado', label: 'Estado', visible: true, isSystem: true },
@@ -292,7 +459,7 @@ export function CampaignDetailPage({
             { id: 'sys_callerid', label: 'CallerID', visible: true, isSystem: true },
         ];
         
-        const dynConfigs: TableColumnConfig[] = (campaign.leadStructureSchema || [
+        const dynConfigs: TableColumnConfig[] = campaign.campaign_type === 'INBOUND' ? [] : (campaign.leadStructureSchema || [
             {name: "telefono", required: true},
             {name: "speech", required: false}
         ]).map(col => ({
@@ -380,7 +547,16 @@ export function CampaignDetailPage({
         setDialLevel(campaign.autoDialLevel || "1.0");
         setMaxRetries(campaign.maxRetries ?? 3);
         setTtsTemplates(campaign.ttsTemplates || []);
-    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates]);
+        if (campaign.predictive_target_drop_rate !== undefined) {
+            setPredTargetDropRate(campaign.predictive_target_drop_rate);
+        }
+        if (campaign.predictive_min_factor !== undefined) {
+            setPredMinFactor(campaign.predictive_min_factor);
+        }
+        if (campaign.predictive_max_factor !== undefined) {
+            setPredMaxFactor(campaign.predictive_max_factor);
+        }
+    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor]);
 
     useEffect(() => {
         const fetchCps = async () => {
@@ -426,9 +602,15 @@ export function CampaignDetailPage({
         if (retryGroups.FalloTecnico.minutes !== Math.max(origFailed, 1)) return true;
 
         if ((selectedTrunkId === '__none__' ? '' : selectedTrunkId) !== (campaign.trunk_id || '')) return true;
+
+        if (campaign.campaign_type === 'OUTBOUND_PREDICTIVE') {
+            if (predTargetDropRate !== (campaign.predictive_target_drop_rate ?? 0.03)) return true;
+            if (predMinFactor !== (campaign.predictive_min_factor ?? 1.0)) return true;
+            if (predMaxFactor !== (campaign.predictive_max_factor ?? 4.0)) return true;
+        }
         
         return false;
-    }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id]);
+    }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, predTargetDropRate, predMinFactor, predMaxFactor, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type]);
 
     const handleSaveGeneralSettings = async () => {
         setSavingGeneral(true);
@@ -447,7 +629,14 @@ export function CampaignDetailPage({
                 api.updateCampaignDialLevel(campaign.id, dialLevel),
                 api.updateCampaignRetries(campaign.id, maxRetries),
                 api.updateCampaignRetrySettings(campaign.id, expandedRetrySettings),
-                api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId)
+                api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId),
+                ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
+                api.updateCampaignPredictive(campaign.id, {
+                    predictive_target_drop_rate: predTargetDropRate,
+                    predictive_min_factor: predMinFactor,
+                    predictive_max_factor: predMaxFactor,
+                })
+                ] : [])
             ]);
             toast.success("Configuración general guardada correctamente");
             if (onUpdateCampaign) onUpdateCampaign();
@@ -495,6 +684,83 @@ export function CampaignDetailPage({
         setStructureSchema(structureSchema.filter(s => s.name !== colName));
     };
 
+    const handleTestRecordingConnection = async () => {
+        setTestingConnection(true);
+        try {
+            const payload: any = {
+                external_type: recordingExternalType,
+                host: recordingHost,
+                port: recordingPort,
+            };
+            if (recordingExternalType === 'sftp' || recordingExternalType === 'ftp') {
+                payload.username = recordingUsername;
+                payload.password = recordingPassword;
+            } else if (recordingExternalType === 's3') {
+                payload.access_key = recordingAccessKey;
+                payload.secret_key = recordingSecretKey;
+                payload.region = recordingRegion;
+                payload.bucket = recordingBucket;
+            }
+            const resp = await api.testRecordingConnection(campaign.id, payload);
+            if (resp.success) {
+                setRecordingApprovedSnapshot({
+                    external_type: recordingExternalType,
+                    host: recordingHost,
+                    port: recordingPort,
+                    username: recordingUsername,
+                    password: recordingPassword,
+                    access_key: recordingAccessKey,
+                    secret_key: recordingSecretKey,
+                    region: recordingRegion,
+                    bucket: recordingBucket,
+                });
+                toast.success(resp.message || "Conexión exitosa");
+            } else {
+                setRecordingApprovedSnapshot(null);
+                toast.error(resp.error || "Error de conexión");
+            }
+        } catch (error: any) {
+            setRecordingApprovedSnapshot(null);
+            toast.error(error.message || "Error al probar la conexión");
+        } finally {
+            setTestingConnection(false);
+        }
+    };
+
+    const handleSaveRecordingSettings = async () => {
+        setSavingRecording(true);
+        try {
+            const settings: any = {
+                enabled: recordingEnabled,
+                storage: recordingStorage,
+                filename_pattern: recordingFilenamePattern,
+            };
+            if (recordingStorage === 'external') {
+                settings.external_type = recordingExternalType;
+                if (recordingExternalType === 'sftp' || recordingExternalType === 'ftp') {
+                    settings.host = recordingHost;
+                    settings.port = recordingPort;
+                    settings.username = recordingUsername;
+                    if (recordingPassword) settings.password = recordingPassword;
+                } else if (recordingExternalType === 's3') {
+                    settings.host = recordingHost;
+                    settings.access_key = recordingAccessKey;
+                    if (recordingSecretKey) settings.secret_key = recordingSecretKey;
+                    settings.region = recordingRegion;
+                    settings.bucket = recordingBucket;
+                }
+            }
+            await api.updateCampaignRecordingSettings(campaign.id, settings);
+            toast.success("Configuración de grabación guardada");
+            setRecordingApprovedSnapshot(null);
+            if (onUpdateCampaign) onUpdateCampaign();
+        } catch (error: any) {
+            toast.error(error.message || "Error al guardar configuración de grabación");
+        } finally {
+            setSavingRecording(false);
+        }
+    };
+
     // Date filter state - default to today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -513,6 +779,35 @@ export function CampaignDetailPage({
 
     // Dial log data state
     const [dialLogData, setDialLogData] = useState<DialLogRecord[]>([]);
+    
+    useEffect(() => {
+        if (dialLogData.length > 0) {
+            const formKeys = new Set<string>();
+            dialLogData.forEach(r => {
+                if (r.typification_data) {
+                    try {
+                        const parsed = typeof r.typification_data === 'string' ? JSON.parse(r.typification_data) : r.typification_data;
+                        Object.keys(parsed).forEach(k => formKeys.add(k));
+                    } catch(e) {}
+                }
+            });
+            if (formKeys.size > 0) {
+                setTableColumns(prev => {
+                    let changed = false;
+                    const newCols = [...prev];
+                    formKeys.forEach(key => {
+                        const colId = `form_${key}`;
+                        if (!newCols.find(c => c.id === colId)) {
+                            newCols.push({ id: colId, label: key.replace(/_/g, ' '), visible: true, isSystem: false });
+                            changed = true;
+                        }
+                    });
+                    return changed ? newCols : prev;
+                });
+            }
+        }
+    }, [dialLogData]);
+
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [loadingProgress, setLoadingProgress] = useState<{ current: number; total: number } | null>(null);
@@ -521,6 +816,8 @@ export function CampaignDetailPage({
     const [searchTerm, setSearchTerm] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [listFilter, setListFilter] = useState("all");
+    const [includeRecordings, setIncludeRecordings] = useState(false);
+    const [downloadProgress, setDownloadProgress] = useState<{current: number; total: number} | null>(null);
 
     // Lists filters state
     const [listSearchTerm, setListSearchTerm] = useState("");
@@ -584,7 +881,7 @@ export function CampaignDetailPage({
         const dtmf = record.dtmf_pressed || record.dtmf_response;
         const callStatus = record.call_status;
         const leadStatus = record.lead_status || record.status;
-        return getDetailDisplayStatus(callStatus, dtmf, leadStatus);
+        return getDetailDisplayStatus(callStatus, dtmf, leadStatus, record.typification_name);
     };
 
 
@@ -1160,10 +1457,10 @@ export function CampaignDetailPage({
         return finalArray;
     }, [dialLogData, realtimeStats, sparklineRange]);
 
-    const handleDownloadReport = () => {
+    const handleDownloadReport = async () => {
         const activeCols = tableColumns.filter(c => c.visible);
         const headers = activeCols.map(c => c.label);
-        headers.push("Campaign ID"); // Always include internally
+        headers.push("Campaign ID");
 
         const rows = filteredRecords.map((record) => {
             const rowValues = activeCols.map(col => {
@@ -1175,11 +1472,21 @@ export function CampaignDetailPage({
                 if (col.id === 'sys_lista') return record.list_name || "";
                 if (col.id === 'sys_desc') return record.list_description || "";
                 if (col.id === 'sys_callerid') return record.caller_id || record.caller_code || record.outbound_cid || "";
-                
-                // Dynamic fields
-                const colName = col.id.replace('dyn_', '');
-                if (colName === "telefono") return record.phone_number || "";
-                if (record.tts_vars && record.tts_vars[colName]) return record.tts_vars[colName];
+                if (col.id === 'sys_grabacion' || col.id === 'sys_telefono') return record.phone_number || "";
+                if (col.id === 'sys_agente') return record.agent || record.agent_username || record.user || "";
+
+                const colName = col.id.replace('dyn_', '').replace('form_', '');
+                if (col.id.startsWith('dyn_')) {
+                    if (colName === "telefono") return record.phone_number || "";
+                    if (record.tts_vars && record.tts_vars[colName]) return record.tts_vars[colName];
+                } else if (col.id.startsWith('form_')) {
+                    if (record.typification_data) {
+                        try {
+                            const parsed = typeof record.typification_data === 'string' ? JSON.parse(record.typification_data) : record.typification_data;
+                            if (parsed && parsed[colName] !== undefined) return parsed[colName];
+                        } catch(e) {}
+                    }
+                }
                 return "";
             });
 
@@ -1189,22 +1496,94 @@ export function CampaignDetailPage({
             ];
         });
 
-        const csvContent = [
-            headers.join(","),
-            ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-        ].join("\n");
+        // Build Excel using XLSX
+        const sheetData = [headers, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(sheetData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Reporte");
+        const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
 
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `reporte_${campaign.name.replace(/\s+/g, "_")}_${formatForBackendAPI(dateRange[0].startDate, timezone)}_${formatForBackendAPI(dateRange[0].endDate, timezone)}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
+        const baseFilename = `reporte_${campaign.name.replace(/\s+/g, "_")}_${formatForBackendAPI(dateRange[0].startDate, timezone)}_${formatForBackendAPI(dateRange[0].endDate, timezone)}`;
 
-        toast.success(`Reporte descargado: ${filteredRecords.length} registros`);
+        // Get auth token for recording downloads
+        const token = (() => {
+            try {
+                const authStr = localStorage.getItem('auth-storage');
+                if (authStr) return JSON.parse(authStr)?.state?.session?.token;
+            } catch {}
+            return null;
+        })();
+
+        // Identify records with recordings
+        const recordsWithRecordings = filteredRecords.filter(r => {
+            const uid = r.uniqueid || r.log_id || r.recording_id;
+            return uid && parseInt(r.call_duration || r.length_in_sec || '0') > 0;
+        });
+
+        if (includeRecordings && recordsWithRecordings.length > 0) {
+            // Build ZIP with Excel + recordings
+            const zip = new JSZip();
+            zip.file(`${baseFilename}.xlsx`, excelBuffer);
+            const recordingsFolder = zip.folder("grabaciones");
+
+            setDownloadProgress({ current: 0, total: recordsWithRecordings.length });
+            let downloadedCount = 0;
+            const failedRecordings: string[] = [];
+
+            for (const record of recordsWithRecordings) {
+                const uid = record.uniqueid || record.log_id || record.recording_id;
+                try {
+                    const resp = await fetch(`/api/audio/recordings/${uid}.wav`, {
+                        headers: token ? { Authorization: `Bearer ${token}` } : {},
+                    });
+                    if (resp.ok && resp.status !== 404) {
+                        const blob = await resp.blob();
+                        if (blob.size > 100) {
+                            recordingsFolder?.file(`${uid}.wav`, blob);
+                            downloadedCount++;
+                        } else {
+                            failedRecordings.push(`${uid} (empty)`);
+                        }
+                    } else {
+                        failedRecordings.push(`${uid} (HTTP ${resp.status})`);
+                    }
+                } catch {
+                    failedRecordings.push(`${uid} (error)`);
+                }
+                setDownloadProgress({ current: downloadedCount, total: recordsWithRecordings.length });
+            }
+
+            const zipBlob = await zip.generateAsync({ type: "blob" });
+            const url = window.URL.createObjectURL(zipBlob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${baseFilename}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            setDownloadProgress(null);
+
+            const msg = `ZIP descargado: ${filteredRecords.length} registros, ${downloadedCount} grabaciones`;
+            if (failedRecordings.length > 0) {
+                toast.warning(`${msg} (${failedRecordings.length} no disponibles)`);
+            } else {
+                toast.success(msg);
+            }
+        } else {
+            // Download Excel only
+            const blob = new Blob([excelBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${baseFilename}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+
+            toast.success(`Reporte descargado: ${filteredRecords.length} registros`);
+        }
     };
 
     const handleClearFilters = () => {
@@ -1353,6 +1732,10 @@ export function CampaignDetailPage({
     const potentialTotalAttempts = totalActiveLeads * maxRetriesPerLead;
     const retriesProgressPercent = potentialTotalAttempts > 0 ? Math.round((totalAttemptsMade / potentialTotalAttempts) * 100) : 0;
 
+    // Modal state for recording playback
+    const [recordingModalOpen, setRecordingModalOpen] = useState(false);
+    const [currentRecordingUrl, setCurrentRecordingUrl] = useState<string | null>(null);
+
     return (
         <>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col w-full min-h-0 bg-transparent relative z-0 animate-in fade-in duration-500">
@@ -1378,12 +1761,10 @@ export function CampaignDetailPage({
                                     Monitor
                                 </TabsTrigger>
                             )}
-                            {campaign.campaign_type !== 'INBOUND' && (
-                                <TabsTrigger value="reports" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                    <BarChart3 className="w-4 h-4" />
-                                    Gestión
-                                </TabsTrigger>
-                            )}
+                            <TabsTrigger value="reports" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                <BarChart3 className="w-4 h-4" />
+                                {campaign.campaign_type === 'INBOUND' ? 'Reportes' : 'Gestión'}
+                            </TabsTrigger>
                             {campaign.campaign_type !== 'INBOUND' && (
                                 <TabsTrigger value="lists" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
                                     <List className="w-4 h-4" />
@@ -1524,9 +1905,8 @@ export function CampaignDetailPage({
                 )}
 
                 {/* Tab: Reportes Content */}
-                {campaign.campaign_type !== 'INBOUND' && (
-                    <TabsContent value="reports" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
-                        <TooltipProvider delayDuration={300}>
+                <TabsContent value="reports" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
+                    <TooltipProvider delayDuration={300}>
                         <>
                         <div className="flex-shrink-0 flex flex-wrap xl:flex-nowrap items-center gap-3 w-full relative z-40 p-4 border border-slate-100/50 bg-white/60 backdrop-blur-md rounded-[20px] shadow-sm">
                             
@@ -1607,9 +1987,35 @@ export function CampaignDetailPage({
                                     <Search className="w-4 h-4" />
                                     Consultar
                                 </Button>
-                                <Button onClick={handleDownloadReport} disabled={loading || filteredRecords.length === 0} variant="outline" className="h-11 px-5 rounded-full gap-2 border-slate-200/80 bg-white/60 backdrop-blur-md hover:bg-white text-slate-700 shadow-sm transition-all hover:shadow-md">
-                                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                                    Exportar
+                                
+                                {/* Recording Toggle */}
+                                <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-200/80 shadow-sm">
+                                    <Switch
+                                        checked={includeRecordings}
+                                        onCheckedChange={setIncludeRecordings}
+                                        className="scale-75 data-[state=checked]:bg-red-500"
+                                    />
+                                    <span className="text-xs font-medium text-slate-600 whitespace-nowrap">
+                                        <Mic className="w-3.5 h-3.5 inline mr-1 text-red-500" />
+                                        Grabaciones
+                                    </span>
+                                </div>
+
+                                <Button 
+                                    onClick={handleDownloadReport} 
+                                    disabled={loading || filteredRecords.length === 0} 
+                                    variant="outline" 
+                                    className="h-11 px-5 rounded-full gap-2 border-slate-200/80 bg-white/60 backdrop-blur-md hover:bg-white text-slate-700 shadow-sm transition-all hover:shadow-md"
+                                >
+                                    {downloadProgress ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                                    )}
+                                    {downloadProgress 
+                                        ? `Descargando ${downloadProgress.current}/${downloadProgress.total}` 
+                                        : includeRecordings ? "Exportar ZIP" : "Exportar"
+                                    }
                                 </Button>
                                 <Popover>
                                     <PopoverTrigger asChild>
@@ -1712,18 +2118,64 @@ export function CampaignDetailPage({
                                                                 </Tooltip>
                                                             </TableCell>
                                                         );
+                                                        if (col.id === 'sys_grabacion') {
+                                                            const duration = parseInt(record.length_in_sec || record.call_duration || '0');
+                                                            if (duration > 0 || ['ANSWER', 'COMPLET', 'SALE'].includes(record.call_status || '')) {
+                                                                return (
+                                                                    <TableCell key={col.id}>
+                                                                        <Button 
+                                                                            variant="ghost" 
+                                                                            size="icon"
+                                                                            className="h-8 w-8 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50"
+                                                                            onClick={() => {
+                                                                                const id = record.uniqueid || record.log_id || record.recording_id;
+                                                                                setCurrentRecordingUrl(`/api/audio/recordings/${id}.wav`);
+                                                                                setRecordingModalOpen(true);
+                                                                            }}
+                                                                        >
+                                                                            <PlayCircle className="w-5 h-5" />
+                                                                        </Button>
+                                                                    </TableCell>
+                                                                );
+                                                            }
+                                                            return <TableCell key={col.id} className="text-slate-300">-</TableCell>;
+                                                        }
                                                         if (col.id === 'sys_duracion') return <TableCell key={col.id} className="font-mono text-sm">{formatDuration(record.length_in_sec ?? record.call_duration ?? 0)}</TableCell>;
                                                         if (col.id === 'sys_intentos') return <TableCell key={col.id} className="font-mono">{record.attempt_number ?? record.called_count ?? 1}</TableCell>;
                                                         if (col.id === 'sys_dtmf') return <TableCell key={col.id} className="font-mono">{record.dtmf_pressed || record.dtmf_response || "-"}</TableCell>;
                                                         if (col.id === 'sys_lista') return <TableCell key={col.id}>{record.list_name || "-"}</TableCell>;
                                                         if (col.id === 'sys_desc') return <TableCell key={col.id} className="text-slate-600">{record.list_description || "-"}</TableCell>;
                                                         if (col.id === 'sys_callerid') return <TableCell key={col.id} className="font-mono text-sm">{record.caller_id || record.caller_code || record.outbound_cid || "-"}</TableCell>;
+                                                        if (col.id === 'sys_telefono') {
+                                                            let phone = record.phone_number;
+                                                            if (!phone || phone === '') {
+                                                                if (record.typification_data) {
+                                                                    try {
+                                                                        const parsed = typeof record.typification_data === 'string' ? JSON.parse(record.typification_data) : record.typification_data;
+                                                                        phone = parsed.telefono || parsed['telefono '] || parsed.Telefono || parsed.phone || "";
+                                                                    } catch(e) {}
+                                                                }
+                                                            }
+                                                            return <TableCell key={col.id} className="font-mono text-sm">{phone || "-"}</TableCell>;
+                                                        }
+                                                        if (col.id === 'sys_agente') return <TableCell key={col.id} className="text-sm">{record.agent_username || record.user || "-"}</TableCell>;
                                                         
                                                         // Dynamic fields
-                                                        const colName = col.id.replace('dyn_', '');
+                                                        const colName = col.id.replace('dyn_', '').replace('form_', '');
                                                         let val = "";
-                                                        if (colName === "telefono") val = record.phone_number || "";
-                                                        else if (record.tts_vars && record.tts_vars[colName]) val = record.tts_vars[colName];
+                                                        
+                                                        if (col.id.startsWith('dyn_')) {
+                                                            if (colName === "telefono") val = record.phone_number || "";
+                                                            else if (record.tts_vars && record.tts_vars[colName]) val = record.tts_vars[colName];
+                                                        } else if (col.id.startsWith('form_')) {
+                                                            if (record.typification_data) {
+                                                                try {
+                                                                    const parsed = typeof record.typification_data === 'string' ? JSON.parse(record.typification_data) : record.typification_data;
+                                                                    if (parsed && parsed[colName]) val = parsed[colName];
+                                                                } catch(e) {}
+                                                            }
+                                                        }
+                                                        
                                                         return <TableCell key={col.id} className="text-sm">{val !== "" ? val : "-"}</TableCell>;
                                                     })}
                                                 </TableRow>
@@ -1745,7 +2197,6 @@ export function CampaignDetailPage({
                         </>
                     </TooltipProvider>
                 </TabsContent>
-                )}
 
                 {/* Tab: Listas */}
                 <TabsContent value="lists" forceMount className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden gap-4">
@@ -2011,6 +2462,11 @@ export function CampaignDetailPage({
                 <TabsContent value="config" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden" >
                     <div className="space-y-6">
                         
+                        {/* Tipificaciones y Formularios */}
+                        <div className="w-full">
+                            <CampaignTypifications campaignId={campaign.id} />
+                        </div>
+                        
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                             
                             {/* Card: Nivel de Marcado (Columna 1) */}
@@ -2091,6 +2547,83 @@ export function CampaignDetailPage({
                                         </div>
                                     </CardContent>
                                 </Card>
+
+                                {/* Predictive Config — only for OUTBOUND_PREDICTIVE campaigns */}
+                                {campaign.campaign_type === 'OUTBOUND_PREDICTIVE' && (
+                                <>
+                                <h3 className="text-sm font-semibold tracking-wide text-slate-500 uppercase px-2 mt-6">Predictivo Adaptativo</h3>
+                                <Card className="shadow-sm border border-blue-200/60 bg-gradient-to-br from-blue-50/30 to-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 mt-4">
+                                    <CardHeader className="py-4 border-b border-blue-100/50 bg-blue-50/20">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
+                                                <Activity className="w-4 h-4" />
+                                            </div>
+                                            <div>
+                                                <CardTitle className="text-sm font-semibold">Ajuste Dinámico</CardTitle>
+                                                <CardDescription className="text-xs">El marcador se auto-regula según tasa de abandono real.</CardDescription>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="p-5 flex flex-col gap-4">
+                                        <div className="w-full">
+                                            <div className="flex justify-between items-center mb-1.5">
+                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tasa de Abandono Máxima</Label>
+                                                <span className="text-xs font-mono text-slate-400">{(predTargetDropRate * 100).toFixed(1)}%</span>
+                                            </div>
+                                            <Input
+                                                type="range"
+                                                min="1"
+                                                max="20"
+                                                step="0.5"
+                                                value={Math.round(predTargetDropRate * 100)}
+                                                onChange={(e) => setPredTargetDropRate(parseFloat(e.target.value) / 100)}
+                                                className="w-full h-2 accent-blue-500"
+                                            />
+                                            <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
+                                                <span>1%</span>
+                                                <span>10%</span>
+                                                <span>20%</span>
+                                            </div>
+                                            <p className="text-[10px] text-slate-400 mt-1.5 italic">Porcentaje máximo de llamadas abandonadas aceptable.</p>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Factor Mínimo</Label>
+                                                <Input
+                                                    type="number"
+                                                    min="0.5"
+                                                    max="3.0"
+                                                    step="0.1"
+                                                    value={predMinFactor}
+                                                    onChange={(e) => setPredMinFactor(parseFloat(e.target.value) || 1.0)}
+                                                    className="font-mono text-sm h-9 bg-white shadow-sm"
+                                                />
+                                                <p className="text-[10px] text-slate-400 mt-1">Llamadas mínimas por agente.</p>
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Factor Máximo</Label>
+                                                <Input
+                                                    type="number"
+                                                    min="1.5"
+                                                    max="10.0"
+                                                    step="0.1"
+                                                    value={predMaxFactor}
+                                                    onChange={(e) => setPredMaxFactor(parseFloat(e.target.value) || 4.0)}
+                                                    className="font-mono text-sm h-9 bg-white shadow-sm"
+                                                />
+                                                <p className="text-[10px] text-slate-400 mt-1">Límite superior de llamadas por agente.</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-slate-50/70 p-3 rounded-lg border border-slate-100 text-[10px] text-slate-500 leading-relaxed">
+                                            <p className="font-semibold text-slate-600 mb-1">Cómo funciona:</p>
+                                            <p>El sistema monitorea en tiempo real cuántas llamadas contestan versus cuántas abandonan. Si la tasa de abandono supera el objetivo, reduce automáticamente el ritmo para proteger los leads. Si está por debajo, incrementa gradualmente la velocidad de marcación.</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                </>
+                                )}
                             </div>
 
                             {/* Card: Gestión de Reintentos Unificada (Columnas 2 y 3) */}
@@ -2229,6 +2762,275 @@ export function CampaignDetailPage({
                                 </CardContent>
                             </Card>
                         )}
+
+                        {/* Recording Settings Card */}
+                        <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300">
+                            <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-red-100 rounded-lg text-red-600">
+                                        <Mic className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-base">Ajustes de Grabación de Llamadas</CardTitle>
+                                        <CardDescription className="text-xs">Define el almacenamiento y la nomenclatura de las grabaciones.</CardDescription>
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="p-6 space-y-5">
+                                {/* Recording Toggle */}
+                                <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200/60 bg-slate-50/30">
+                                    <div className="flex items-center gap-3">
+                                        <FileAudio className="w-5 h-5 text-red-500" />
+                                        <div>
+                                            <Label className="text-sm font-semibold text-slate-700">Grabación de Llamadas</Label>
+                                            <p className="text-[11px] text-slate-400">Activa o desactiva la grabación para esta campaña.</p>
+                                        </div>
+                                    </div>
+                                    <Switch 
+                                        checked={recordingEnabled} 
+                                        onCheckedChange={setRecordingEnabled} 
+                                        className="data-[state=checked]:bg-red-500 shadow-sm" 
+                                    />
+                                </div>
+
+                                {/* Storage Destination + External Config + Filename */}
+                                {recordingEnabled && (
+                                <>
+                                <div className="space-y-2">
+                                    <Label htmlFor="recordingStorage" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Destino de Almacenamiento</Label>
+                                    <Select value={recordingStorage} onValueChange={(val) => { setRecordingStorage(val); setRecordingApprovedSnapshot(null); }}>
+                                        <SelectTrigger id="recordingStorage" className="font-mono text-sm h-11 w-full bg-white shadow-sm">
+                                            <SelectValue placeholder="Seleccionar destino..." />
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                                            <SelectItem value="local">
+                                                <div className="flex items-center gap-2">
+                                                    <HardDrive className="w-4 h-4 text-slate-500" />
+                                                    Local
+                                                </div>
+                                            </SelectItem>
+                                            <SelectItem value="external">
+                                                <div className="flex items-center gap-2">
+                                                    <Link2 className="w-4 h-4 text-blue-500" />
+                                                    Externo
+                                                </div>
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-[10px] text-slate-400">Selecciona dónde se almacenarán los archivos de audio.</p>
+                                </div>
+
+                                {/* External Storage Configuration */}
+                                {recordingStorage === 'external' && (
+                                    <div className="space-y-4 p-4 rounded-xl border border-blue-200/60 bg-blue-50/30">
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tipo de Conexión</Label>
+                                            <Select value={recordingExternalType} onValueChange={(val) => { setRecordingExternalType(val); setRecordingApprovedSnapshot(null); }}>
+                                                <SelectTrigger className="font-mono text-sm h-11 w-full bg-white shadow-sm">
+                                                    <SelectValue placeholder="Seleccionar tipo..." />
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
+                                                    <SelectItem value="sftp">SFTP</SelectItem>
+                                                    <SelectItem value="ftp">FTP</SelectItem>
+                                                    <SelectItem value="s3">S3 (Amazon)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {/* FTP / SFTP Fields */}
+                                        {(recordingExternalType === 'sftp' || recordingExternalType === 'ftp') && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Host / IP</Label>
+                                                    <Input 
+                                                        value={recordingHost} 
+                                                        onChange={(e) => { setRecordingHost(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="192.168.1.100"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Puerto</Label>
+                                                    <Input 
+                                                        value={recordingPort} 
+                                                        onChange={(e) => { setRecordingPort(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder={recordingExternalType === 'sftp' ? '22' : '21'}
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Usuario</Label>
+                                                    <Input 
+                                                        value={recordingUsername} 
+                                                        onChange={(e) => { setRecordingUsername(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="usuario"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Contraseña</Label>
+                                                    <Input 
+                                                        type="password"
+                                                        value={recordingPassword} 
+                                                        onChange={(e) => { setRecordingPassword(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="••••••••"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* S3 Fields */}
+                                        {recordingExternalType === 's3' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Access Key</Label>
+                                                    <Input 
+                                                        value={recordingAccessKey} 
+                                                        onChange={(e) => { setRecordingAccessKey(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="AKIA..."
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Secret Key</Label>
+                                                    <Input 
+                                                        type="password"
+                                                        value={recordingSecretKey} 
+                                                        onChange={(e) => { setRecordingSecretKey(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="••••••••"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Región</Label>
+                                                    <Input 
+                                                        value={recordingRegion} 
+                                                        onChange={(e) => { setRecordingRegion(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="us-east-1"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label className="text-xs font-semibold text-slate-500">Bucket</Label>
+                                                    <Input 
+                                                        value={recordingBucket} 
+                                                        onChange={(e) => { setRecordingBucket(e.target.value); setRecordingApprovedSnapshot(null); }}
+                                                        placeholder="mi-bucket"
+                                                        className="h-10 text-sm bg-white"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Test Connection */}
+                                        <div className="flex items-center justify-between pt-3 border-t border-blue-200/40">
+                                            <div className="flex items-center gap-2">
+                                                {isRecordingConnectionApproved ? (
+                                                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs gap-1.5">
+                                                        <CheckCircle className="w-3.5 h-3.5" /> Conexión verificada
+                                                    </Badge>
+                                                ) : (
+                                                    <span className="text-xs text-amber-600 font-medium">La conexión no ha sido verificada</span>
+                                                )}
+                                            </div>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={handleTestRecordingConnection}
+                                                disabled={testingConnection || !recordingHost || (recordingExternalType === 's3' && (!recordingAccessKey || !recordingSecretKey || !recordingRegion || !recordingBucket))}
+                                                className="h-9 text-sm gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 ml-auto"
+                                            >
+                                                {testingConnection ? (
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                ) : (
+                                                    <Link2 className="w-3.5 h-3.5" />
+                                                )}
+                                                Probar Conexión
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Filename Nomenclature */}
+                                <div className="space-y-3 pt-2 border-t border-slate-100">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            Nomenclatura del Archivo de Audio
+                                        </Label>
+                                        <Input 
+                                            ref={recordingFilenameRef}
+                                            value={recordingFilenamePattern} 
+                                            onChange={(e) => setRecordingFilenamePattern(e.target.value)}
+                                            placeholder="{campaign_name}_{date}_{time}"
+                                            className="font-mono text-sm h-11 w-full bg-white shadow-sm"
+                                        />
+                                        <p className="text-[10px] text-slate-400">Define el patrón de nombres. Haz clic en las etiquetas para insertarlas.</p>
+                                    </div>
+
+                                    <div>
+                                        <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 block">Variables Disponibles (clic para insertar)</Label>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {[
+                                                { label: '{campaign_name}', desc: 'Nombre de la campaña' },
+                                                { label: '{date}', desc: 'Fecha (YYYY-MM-DD)' },
+                                                { label: '{time}', desc: 'Hora (HH-MM-SS)' },
+                                                ...(campaign.campaign_type !== 'INBOUND' ? [{ label: '{dst_number}', desc: 'Número de destino' }] : []),
+                                                ...(campaign.campaign_type === 'INBOUND' ? [{ label: '{src_number}', desc: 'Número de origen / Caller ID' }] : []),
+                                            ].map((variable) => (
+                                                <Badge 
+                                                    key={variable.label}
+                                                    variant="secondary"
+                                                    className="cursor-pointer hover:bg-red-100 border-red-200/50 text-red-700 font-mono text-xs transition-colors"
+                                                    title={variable.desc}
+                                                    onClick={() => {
+                                                        const input = recordingFilenameRef.current;
+                                                        if (!input) return;
+                                                        const start = input.selectionStart ?? recordingFilenamePattern.length;
+                                                        const newVal = recordingFilenamePattern.substring(0, start) + variable.label + recordingFilenamePattern.substring(start);
+                                                        setRecordingFilenamePattern(newVal);
+                                                        setTimeout(() => {
+                                                            const cursorPos = start + variable.label.length;
+                                                            input.focus();
+                                                            input.setSelectionRange(cursorPos, cursorPos);
+                                                        }, 0);
+                                                    }}
+                                                >
+                                                    {variable.label}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                </>
+                                )}
+
+                                {/* Save Recording Button */}
+                                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                                    {recordingStorage === 'external' && !canSaveRecording ? (
+                                        <p className="text-xs text-amber-600 flex items-center gap-1 font-medium">
+                                            <XCircle className="w-3.5 h-3.5" />
+                                            Debes probar la conexión externa antes de guardar
+                                        </p>
+                                    ) : (
+                                        <span />
+                                    )}
+                                    <Button
+                                        onClick={handleSaveRecordingSettings}
+                                        disabled={savingRecording || !recordingEnabled || (recordingStorage === 'external' && !canSaveRecording)}
+                                        className="gap-2 min-w-[200px] h-11 rounded-xl shadow-lg shadow-red-500/10 text-sm bg-red-600 hover:bg-red-700"
+                                    >
+                                        {savingRecording ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Save className="w-4 h-4" />
+                                        )}
+                                        {savingRecording ? "Guardando..." : "Guardar Grabación"}
+                                    </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
+
                     </div>
                 </TabsContent >
 
@@ -2565,18 +3367,46 @@ export function CampaignDetailPage({
                     
                     {/* Progresos Integrados */}
                     <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex flex-col gap-4">
-                        {campaign.campaign_type === 'INBOUND' ? (
-                            <div>
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                                        Cola de Llamadas Entrantes
-                                    </span>
+                        {campaign.campaign_type === 'INBOUND' ? (() => {
+                            const assignedAgents = campaignAgents.length;
+                            const activeAgents = allAgents.filter(a => campaignAgents.includes(a.username));
+                            const connectedAgents = allAgents.filter(a => campaignAgents.includes(a.username) && ['READY', 'INCALL'].includes((a as any).state)).length;
+                            const talkingAgents = allAgents.filter(a => campaignAgents.includes(a.username) && (a as any).state === 'INCALL').length;
+                            const inboundCalls = dialLogData;
+                            const answeredCalls = inboundCalls.filter(d => ['Contactado', 'SALE', 'COMPLETED'].includes(d.status || '')).length;
+                            const abandonedCalls = inboundCalls.filter(d => ['Abandonada', 'DROP', 'NO ANSWER'].includes(d.status || '')).length;
+                            const totalCalls = inboundCalls.length;
+                            const abandonRate = totalCalls > 0 ? ((abandonedCalls / totalCalls) * 100).toFixed(1) : "0.0";
+                            
+                            return (
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full">
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Users className="w-3.5 h-3.5 text-blue-500" /> Agentes Asignados</span>
+                                    <span className="text-xl font-black text-slate-800">{assignedAgents}</span>
                                 </div>
-                                <div className="text-xs text-slate-500">
-                                    Agentes Asignados: <span className="font-semibold text-slate-700">{campaignAgents.length}</span>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Agentes Conectados</span>
+                                    <span className="text-xl font-black text-slate-800">{connectedAgents}</span>
+                                </div>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-indigo-500" /> Agentes Hablando</span>
+                                    <span className="text-xl font-black text-slate-800">{talkingAgents}</span>
+                                </div>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-teal-500" /> Contestadas (Hoy)</span>
+                                    <span className="text-xl font-black text-slate-800">{answeredCalls}</span>
+                                </div>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><PhoneOff className="w-3.5 h-3.5 text-red-500" /> Abandonos (Hoy)</span>
+                                    <span className="text-xl font-black text-slate-800">{abandonedCalls}</span>
+                                </div>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/60 shadow-sm flex flex-col justify-center">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5 text-orange-500" /> Tasa de Abandono</span>
+                                    <span className="text-xl font-black text-slate-800">{abandonRate}%</span>
                                 </div>
                             </div>
-                        ) : (
+                            );
+                        })() : (
                             <>
                                 {/* Progreso Registros */}
                                 <div>
@@ -2746,6 +3576,31 @@ export function CampaignDetailPage({
                             ) : (
                                 <><RefreshCcw className="w-4 h-4" /> Reciclar Seleccionados</>
                             )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={recordingModalOpen} onOpenChange={setRecordingModalOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <PlayCircle className="w-5 h-5 text-indigo-500" />
+                            Reproductor de Grabación
+                        </DialogTitle>
+                        <DialogDescription>
+                            Escucha la grabación de esta llamada.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex flex-col items-center justify-center py-6 bg-slate-50 rounded-xl border border-slate-100 shadow-inner mt-2 w-full overflow-hidden">
+                        {currentRecordingUrl ? (
+                            <RecordingPlayer url={currentRecordingUrl} />
+                        ) : (
+                            <div className="text-sm text-slate-400">Grabación no disponible</div>
+                        )}
+                    </div>
+                    <DialogFooter className="sm:justify-end">
+                        <Button variant="outline" onClick={() => setRecordingModalOpen(false)}>
+                            Cerrar
                         </Button>
                     </DialogFooter>
                 </DialogContent>

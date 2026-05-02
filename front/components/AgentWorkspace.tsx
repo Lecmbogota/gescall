@@ -8,6 +8,7 @@ import GoalsWidget from './GoalsWidget';
 import { useWebPhone } from '../hooks/useWebPhone';
 import { FloatingTeleprompter } from './FloatingTeleprompter';
 import AnimatedList from './AnimatedList';
+import api from '../services/api';
 import corporateHeaderBg from '../assets/corporate_header_bg.png';
 
 const AVAILABLE_WIDGETS = [
@@ -22,6 +23,17 @@ const AVAILABLE_WIDGETS = [
 export const AgentWorkspace: React.FC = () => {
   const { session, logout } = useAuthStore();
   const [phoneNumber, setPhoneNumber] = useState('');
+
+  const handleLogout = () => {
+    const username = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
+    // Broadcast OFFLINE immediately so supervisors see agent as disconnected
+    socketService.updateAgentState(username, 'OFFLINE');
+    // Allow WS message to be sent before disconnecting
+    setTimeout(() => {
+      socketService.disconnect();
+    }, 200);
+    logout();
+  };
   
   const sipExtension = (session?.user as any)?.sip_extension;
   const sipPassword = (session?.user as any)?.sip_password;
@@ -41,8 +53,22 @@ export const AgentWorkspace: React.FC = () => {
   });
   const [isTipificarOpen, setIsTipificarOpen] = useState(false);
   const [selectedTypification, setSelectedTypification] = useState('');
+  const [selectedTypId, setSelectedTypId] = useState<number | null>(null);
   const [isPhoneExpanded, setIsPhoneExpanded] = useState(false);
   const [isWidgetManagerOpen, setIsWidgetManagerOpen] = useState(false);
+
+  // Tipificación dinámica
+  const [typs, setTyps] = useState<any[]>([]);
+  const [formFields, setFormFields] = useState<any[]>([]);
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [selectedCampaignId, setSelectedCampaignId] = useState('');
+  const [typsLoading, setTypsLoading] = useState(false);
+  const [typsSubmitting, setTypsSubmitting] = useState(false);
+  const agentCampaigns: string[] = React.useMemo(() => {
+    const raw = (session as any)?.campaigns || [];
+    return raw.map((c: any) => typeof c === 'string' ? c : c.id).filter(Boolean);
+  }, [session]);
+  const agentUsername = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
   
   const defaultOrder = AVAILABLE_WIDGETS.map(w => w.id);
   const [widgetOrder, setWidgetOrder] = useState<string[]>(() => {
@@ -150,19 +176,58 @@ export const AgentWorkspace: React.FC = () => {
     return () => clearInterval(interval);
   }, [pauseOverlay]);
 
+  // Compute the current detailed state string for backend broadcast
+  const detailedState = React.useMemo(() => {
+    if (sipStatus === 'disconnected') return 'OFFLINE';
+    let s = agentState.toUpperCase();
+    if (callStatus === 'connected') s = 'ON_CALL';
+    if (callStatus === 'calling') s = 'DIALING';
+    if (isTipificarOpen) s = 'WRAPUP';
+    return s;
+  }, [agentState, callStatus, isTipificarOpen, sipStatus]);
+
+  // Keep latest state in a ref so reconnect/heartbeat handlers always read the freshest value
+  const detailedStateRef = React.useRef(detailedState);
+  React.useEffect(() => { detailedStateRef.current = detailedState; }, [detailedState]);
+
+  const usernameRef = React.useRef<string>('AG');
+  React.useEffect(() => {
+    usernameRef.current = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
+  }, [session]);
+
+  // Broadcast state on every change
   React.useEffect(() => {
     localStorage.setItem('gescall_agentState', agentState);
-    
-    // Determine detailed state string
-    let detailedState = agentState.toUpperCase();
-    if (callStatus === 'connected') detailedState = 'ON_CALL';
-    if (callStatus === 'calling') detailedState = 'DIALING';
-    if (isTipificarOpen) detailedState = 'WRAPUP';
-    
-    // Broadcast state to backend
     const username = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
     socketService.updateAgentState(username, detailedState);
-  }, [agentState, callStatus, session]);
+  }, [detailedState, agentState, session]);
+
+  // Ensure socket is connected and re-emit current state on (re)connection.
+  // This prevents Redis from staying as OFFLINE after a reload/network blip
+  // because the disconnect handler in the backend forces OFFLINE on disconnect.
+  React.useEffect(() => {
+    const sock = socketService.connect();
+    const reEmit = () => {
+      socketService.updateAgentState(usernameRef.current, detailedStateRef.current);
+    };
+    // On first connection
+    if (sock?.connected) reEmit();
+    sock?.on('connect', reEmit);
+    sock?.on('reconnect', reEmit);
+    return () => {
+      sock?.off('connect', reEmit);
+      sock?.off('reconnect', reEmit);
+    };
+  }, []);
+
+  // Heartbeat: re-broadcast state every 15s so Redis never expires/staling
+  // and any stale OFFLINE caused by disconnect race conditions self-heals.
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      socketService.updateAgentState(usernameRef.current, detailedStateRef.current);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   React.useEffect(() => {
     if (pauseOverlay) {
@@ -176,9 +241,70 @@ export const AgentWorkspace: React.FC = () => {
   React.useEffect(() => {
     if (prevCallStatusRef.current === 'connected' && callStatus === 'idle') {
       setIsTipificarOpen(true);
+      loadTypifications();
     }
     prevCallStatusRef.current = callStatus;
   }, [callStatus]);
+
+  const loadTypifications = async () => {
+    const campId = selectedCampaignId || agentCampaigns[0];
+    if (!campId) return;
+    setSelectedCampaignId(campId);
+    setTypsLoading(true);
+    try {
+      const res = await api.getTypifications(campId);
+      setTyps(res.data || []);
+    } catch (e) {
+      setTyps([]);
+    } finally {
+      setTypsLoading(false);
+    }
+  };
+
+  const selectTyp = async (typId: number, typName: string) => {
+    setSelectedTypId(typId);
+    setSelectedTypification(typName);
+    setFormData({});
+    const typ = typs.find(t => t.id === typId);
+    if (typ && typ.form_id) {
+      try {
+        const res = await api.getFormFields(selectedCampaignId, typ.form_id);
+        setFormFields(res.data || []);
+      } catch (e) {
+        setFormFields([]);
+      }
+    } else {
+      setFormFields([]);
+      // If no form, save immediately
+      submitTypification(typId);
+    }
+  };
+
+  const submitTypification = async (typId?: number) => {
+    const finalTypId = typId || selectedTypId;
+    if (!finalTypId || !selectedCampaignId) return;
+    setTypsSubmitting(true);
+    try {
+      await api.submitTypification({
+        typification_id: finalTypId,
+        campaign_id: selectedCampaignId,
+        phone_number: callerId || phoneNumber,
+        form_data: Object.keys(formData).length > 0 ? formData : undefined,
+      });
+    } catch (e: any) {
+      console.error('Error submitting typification:', e);
+    } finally {
+      setTypsSubmitting(false);
+      finishWrapup();
+    }
+  };
+
+  const goBackToTypes = () => {
+    setSelectedTypification('');
+    setSelectedTypId(null);
+    setFormFields([]);
+    setFormData({});
+  };
 
   // Auto-expand WebPhone when a call is coming in or connected
   React.useEffect(() => {
@@ -216,6 +342,10 @@ export const AgentWorkspace: React.FC = () => {
     setIsTipificarOpen(false);
     setIsPhoneExpanded(false);
     setShowContactCard(false);
+    setSelectedTypification('');
+    setSelectedTypId(null);
+    setFormFields([]);
+    setFormData({});
   };
 
   const dialpadDigits = [
@@ -525,7 +655,7 @@ export const AgentWorkspace: React.FC = () => {
           <div className="absolute bottom-full left-0 w-full pb-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
             <div className="bg-white border border-slate-200 rounded-xl shadow-lg p-1">
               <button 
-                onClick={logout}
+                onClick={handleLogout}
                 className={`w-full flex items-center gap-2 py-2.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors font-medium text-sm ${isLeftSidebarOpen ? 'px-4' : 'px-0 justify-center'}`}
                 title="Cerrar Sesión"
               >
@@ -1167,223 +1297,120 @@ export const AgentWorkspace: React.FC = () => {
               </button>
             </div>
 
+            {/* Campaign selector */}
+            {agentCampaigns.length > 1 && (
+              <div className="shrink-0 mb-4">
+                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Campaña</label>
+                <select
+                  value={selectedCampaignId}
+                  onChange={e => { setSelectedCampaignId(e.target.value); setTyps([]); setSelectedTypification(''); setSelectedTypId(null); }}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none"
+                >
+                  <option value="">Seleccionar campaña</option>
+                  {agentCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+
             {/* Scrollable Body */}
             <div className="flex-1 overflow-y-auto pr-3 -mr-3 custom-scrollbar flex flex-col">
-              {selectedTypification === '' ? (
-                <div className="grid grid-cols-2 gap-10 animate-in fade-in duration-300 my-auto py-8">
-                  {/* Columna: Contactado */}
-                  <div>
-                    <h4 className="text-sm font-bold text-emerald-600 uppercase tracking-wider mb-5 flex items-center gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                      Contactado
-                    </h4>
-                    <div className="flex flex-col gap-4">
-                      {[
-                        { id: 'venta', label: 'Venta Cerrada (Éxito)' },
-                        { id: 'soporte', label: 'Soporte Resuelto' },
-                        { id: 'promesa', label: 'Promesa de Pago' },
-                        { id: 'agendado', label: 'Agendado para después' }
-                      ].map(opt => (
-                        <button 
-                          key={opt.id}
-                          onDoubleClick={() => {
-                            if (['venta', 'agendado'].includes(opt.id)) {
-                              setSelectedTypification(opt.id);
-                            } else {
-                              finishWrapup();
-                            }
-                          }}
-                          className="px-3 py-2.5 text-sm font-semibold rounded-lg border text-left transition-all bg-white border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 select-none"
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+              {typsLoading ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Cargando tipificaciones...</div>
+              ) : selectedTypification === '' ? (
+                typs.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-slate-300"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+                    <p>No hay tipificaciones configuradas para esta campaña.</p>
+                    {!selectedCampaignId && agentCampaigns.length === 0 && <p className="text-[10px]">Contacta al administrador para configurarlas.</p>}
+                    {selectedCampaignId && <button onClick={loadTypifications} className="text-indigo-500 underline text-xs">Reintentar</button>}
                   </div>
-                  
-                  {/* Columna: No Contactado */}
-                  <div>
-                    <h4 className="text-sm font-bold text-rose-600 uppercase tracking-wider mb-5 flex items-center gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                      No Contactado
-                    </h4>
-                    <div className="flex flex-col gap-4">
-                      {[
-                        { id: 'buzon', label: 'Buzón de Voz / No Contesta' },
-                        { id: 'equivocado', label: 'Número Equivocado' },
-                        { id: 'cuelga', label: 'Cuelga Llamada' },
-                        { id: 'invalido', label: 'Número Inválido' }
-                      ].map(opt => (
-                        <button 
-                          key={opt.id}
-                          onDoubleClick={() => {
-                            if (['venta', 'agendado'].includes(opt.id)) {
-                              setSelectedTypification(opt.id);
-                            } else {
-                              finishWrapup();
-                            }
-                          }}
-                          className="px-3 py-2.5 text-sm font-semibold rounded-lg border text-left transition-all bg-white border-slate-200 text-slate-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 select-none"
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                ) : (
+                  <div className="animate-in fade-in duration-300 my-auto py-8">
+                    {['Contactado', 'No Contactado'].map(cat => {
+                      const items = typs.filter((t: any) => t.category === cat && t.active);
+                      if (items.length === 0) return null;
+                      const isContactado = cat === 'Contactado';
+                      return (
+                        <div key={cat} className="mb-8">
+                          <h4 className={`text-sm font-bold uppercase tracking-wider mb-5 flex items-center gap-2 ${isContactado ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              {isContactado
+                                ? <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>
+                                : <><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></>
+                              }
+                            </svg>
+                            {cat}
+                          </h4>
+                          <div className="grid grid-cols-2 gap-3">
+                            {items.map((typ: any) => (
+                              <button
+                                key={typ.id}
+                                onDoubleClick={() => selectTyp(typ.id, typ.name)}
+                                className={`px-4 py-3 text-sm font-semibold rounded-lg border text-left transition-all bg-white border-slate-200 text-slate-600 select-none ${isContactado ? 'hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700' : 'hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'}`}
+                              >
+                                {typ.name}
+                                {typ.form_name && <span className="block text-[10px] text-slate-400 font-normal mt-0.5">Formulario: {typ.form_name}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
+                )
               ) : (
                 <div className="animate-in slide-in-from-right-4 fade-in duration-300 pb-4">
-                  <button onClick={() => setSelectedTypification('')} className="mb-4 text-xs font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1 transition-colors px-2 py-1 -ml-2 rounded-md hover:bg-slate-50">
+                  <button onClick={goBackToTypes} className="mb-4 text-xs font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1 transition-colors px-2 py-1 -ml-2 rounded-md hover:bg-slate-50">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
                     Volver a resultados
                   </button>
-                  
-                  {/* Formularios Dinámicos por Tipificación */}
-                  {selectedTypification === 'venta' && (
-                    <div className="bg-emerald-50/30 rounded-xl p-5 border border-emerald-100 shadow-sm">
-                      <h4 className="text-sm font-black text-emerald-700 uppercase tracking-wider mb-6 flex items-center gap-2 border-b border-emerald-100 pb-3">
+
+                  {formFields.length > 0 && (
+                    <div className="bg-indigo-50/30 rounded-xl p-5 border border-indigo-100 shadow-sm">
+                      <h4 className="text-sm font-black text-indigo-700 uppercase tracking-wider mb-6 flex items-center gap-2 border-b border-indigo-100 pb-3">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                        Formulario de Venta (Campaña TIGO)
+                        Formulario: {selectedTypification}
                       </h4>
-                      
-                      {/* Sección 1: Datos Personales */}
-                      <div className="mb-6">
-                        <h5 className="text-xs font-bold text-emerald-800 mb-3 uppercase flex items-center gap-2"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div> 1. Datos Personales</h5>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Nombres Completos</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Ej. Juan Pérez" />
+                      <div className="grid grid-cols-2 gap-4">
+                        {formFields.map((field: any) => (
+                          <div key={field.id} className={field.field_type === 'textarea' ? 'col-span-2' : ''}>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">
+                              {field.field_label}
+                              {field.is_required && <span className="text-red-500 ml-0.5">*</span>}
+                            </label>
+                            {field.field_type === 'select' ? (
+                              <select
+                                className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                                value={formData[field.field_name] || ''}
+                                onChange={e => setFormData({ ...formData, [field.field_name]: e.target.value })}
+                              >
+                                <option value="">Seleccionar...</option>
+                                {(field.options || []).map((opt: any) => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            ) : field.field_type === 'textarea' ? (
+                              <textarea
+                                className="w-full h-20 px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                                value={formData[field.field_name] || ''}
+                                onChange={e => setFormData({ ...formData, [field.field_name]: e.target.value })}
+                              />
+                            ) : (
+                              <input
+                                type={field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : field.field_type === 'email' ? 'email' : field.field_type === 'phone' ? 'tel' : 'text'}
+                                className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                                value={formData[field.field_name] || ''}
+                                onChange={e => setFormData({ ...formData, [field.field_name]: e.target.value })}
+                              />
+                            )}
                           </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Número de Cédula</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Ej. 1020304050" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Fecha de Expedición</label>
-                            <input type="date" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Correo Electrónico</label>
-                            <input type="email" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="correo@ejemplo.com" />
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Teléfono Alterno de Contacto</label>
-                            <input type="tel" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Opcional" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Sección 2: Dirección */}
-                      <div className="mb-6">
-                        <h5 className="text-xs font-bold text-emerald-800 mb-3 uppercase flex items-center gap-2"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div> 2. Dirección de Instalación</h5>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Ciudad</label>
-                            <select className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
-                              <option>Bogotá</option>
-                              <option>Medellín</option>
-                              <option>Cali</option>
-                              <option>Barranquilla</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Barrio</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Ej. Chapinero" />
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Dirección Completa</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Ej. Calle 123 #45-67 Apto 802" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Estrato</label>
-                            <select className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
-                              <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option>
-                            </select>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Sección 3: Referencias */}
-                      <div className="mb-6">
-                        <h5 className="text-xs font-bold text-emerald-800 mb-3 uppercase flex items-center gap-2"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div> 3. Referencias Personales</h5>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Nombre Ref. 1</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Teléfono Ref. 1</label>
-                            <input type="tel" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Nombre Ref. 2</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Teléfono Ref. 2</label>
-                            <input type="tel" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Sección 4: Venta */}
-                      <div>
-                        <h5 className="text-xs font-bold text-emerald-800 mb-3 uppercase flex items-center gap-2"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div> 4. Detalles de la Venta</h5>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Plan Contratado</label>
-                            <select className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
-                              <option>Combo Fibra 500 Megas + TV HD</option>
-                              <option>Combo Fibra 900 Megas + TV Premium</option>
-                              <option>Solo Internet Fibra Óptica</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Valor Mensual ($)</label>
-                            <input type="number" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" defaultValue="95000" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Método de Pago</label>
-                            <select className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
-                              <option>Tarjeta de Crédito (Suscripción)</option>
-                              <option>Factura Mensual Efecty/Baloto</option>
-                              <option>Débito Automático Bancario</option>
-                            </select>
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Código de Verificación de Identidad (SMS)</label>
-                            <input type="text" className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="Código de 6 dígitos que recibió el cliente" />
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Notas Adicionales del Vendedor</label>
-                            <textarea className="w-full h-20 px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 resize-none" placeholder="Instrucciones para el técnico, horarios de visita preferidos, etc."></textarea>
-                          </div>
-                        </div>
+                        ))}
                       </div>
                     </div>
                   )}
 
-                  {selectedTypification === 'agendado' && (
-                    <div className="bg-indigo-50/50 rounded-xl p-5 border border-indigo-100">
-                      <h4 className="text-sm font-black text-indigo-700 uppercase tracking-wider mb-4 flex items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
-                        Agendar Callback
-                      </h4>
-                      <div className="grid grid-cols-2 gap-5">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Fecha</label>
-                          <input type="date" className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Hora</label>
-                          <input type="time" className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20" />
-                        </div>
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Motivo del Agendamiento</label>
-                          <textarea className="w-full h-20 px-3 py-2 bg-white border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 resize-none" placeholder="¿Por qué se reprograma la llamada?"></textarea>
-                        </div>
-                      </div>
-                    </div>
+                  {formFields.length === 0 && selectedTypId && (
+                    <div className="text-center py-10 text-slate-400 text-sm">Esta tipificación no requiere formulario adicional.</div>
                   )}
                 </div>
               )}
@@ -1391,19 +1418,23 @@ export const AgentWorkspace: React.FC = () => {
 
             {/* Footer */}
             <div className="shrink-0 mt-auto pt-5 border-t border-slate-100 flex justify-end gap-3 bg-white">
-              <button 
+              <button
                 onClick={() => setIsTipificarOpen(false)}
                 className="px-5 py-2.5 text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg font-medium transition-colors"
               >
                 Cancelar
               </button>
               {selectedTypification !== '' && (
-                <button 
-                  onClick={finishWrapup}
-                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition-all shadow-md shadow-indigo-200 flex items-center gap-2"
+                <button
+                  onClick={() => submitTypification()}
+                  disabled={typsSubmitting}
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition-all shadow-md shadow-indigo-200 flex items-center gap-2 disabled:opacity-50"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                  {selectedTypification === 'venta' ? 'Guardar Venta' : selectedTypification === 'agendado' ? 'Confirmar Agendamiento' : 'Guardar Gestión'}
+                  {typsSubmitting ? (
+                    <><svg className="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Guardando...</>
+                  ) : (
+                    <><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Guardar Gestión</>
+                  )}
                 </button>
               )}
             </div>

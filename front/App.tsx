@@ -25,6 +25,7 @@ import { Toaster } from './components/ui/sonner';
 import { useAuthStore } from './stores/authStore';
 import authService from './services/authService';
 import { AgentWorkspace } from './components/AgentWorkspace';
+import socketService from './services/socket';
 
 // Campaign type for navigation
 interface Campaign {
@@ -75,6 +76,19 @@ export default function App() {
 
   const handleLogout = () => {
     console.log('[App] Logging out user:', username);
+
+    // Broadcast OFFLINE immediately so supervisors see the agent as disconnected,
+    // regardless of how the browser/socket lifecycle resolves.
+    try {
+      socketService.updateAgentState(username, 'OFFLINE');
+    } catch (e) {
+      console.error('[App] Error sending OFFLINE on logout:', e);
+    }
+
+    // Allow the WebSocket message to be sent before disconnecting
+    setTimeout(() => {
+      socketService.disconnect();
+    }, 200);
 
     // Clear auth store
     logoutStore();

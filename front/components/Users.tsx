@@ -49,6 +49,7 @@ import {
 } from "./ui/dropdown-menu";
 import { toast } from "sonner";
 import api from "../services/api";
+import socketService from "../services/socket";
 import { useAuthStore, Campaign } from "../stores/authStore";
 
 interface User {
@@ -59,6 +60,8 @@ interface User {
     active: boolean;
     created_at: string;
     api_token?: string | null;
+    sip_extension?: string | null;
+    extension_status?: string;
 }
 
 interface UsersProps {
@@ -144,6 +147,66 @@ export function Users({ username: loggedInUsername }: UsersProps) {
 
     useEffect(() => {
         fetchData();
+    }, []);
+
+    // Periodic lightweight poll for extension statuses (every 30s)
+    useEffect(() => {
+        const interval = setInterval(async () => {
+            try {
+                const res = await api.getUsers();
+                if (res.success && res.data) {
+                    setUsers(prev => prev.map(user => {
+                        const fresh = res.data.find((u: any) => u.user_id === user.user_id);
+                        if (fresh) {
+                            return { ...user, extension_status: fresh.extension_status || user.extension_status };
+                        }
+                        return user;
+                    }));
+                }
+            } catch (e) {}
+        }, 30000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Real-time WebSocket: extension status + agent state updates
+    useEffect(() => {
+        const handleRealtime = (data: any) => {
+            if (!data) return;
+
+            // Extension statuses from periodic broadcast
+            if (data.extensions && typeof data.extensions === 'object') {
+                const keys = Object.keys(data.extensions);
+                if (keys.length > 0) console.log('[Users WS] extensions:', keys.length, 'keys');
+                setUsers(prev => prev.map(user => {
+                    const extStatus = data.extensions[user.username];
+                    if (extStatus) {
+                        return { ...user, extension_status: extStatus };
+                    }
+                    return user;
+                }));
+            }
+
+            // Single agent update (includes extension_status)
+            if (data.agent_update) {
+                const upd = data.agent_update;
+                console.log('[Users WS] agent_update:', upd.username, upd.state, 'ext:', upd.extension_status);
+                setUsers(prev => prev.map(user => {
+                    if (user.username === upd.username && upd.extension_status) {
+                        return { ...user, extension_status: upd.extension_status };
+                    }
+                    return user;
+                }));
+            }
+        };
+
+        console.log('[Users] Subscribing to WebSocket dashboard:realtime:update');
+        socketService.connect();
+        socketService.on('dashboard:realtime:update', handleRealtime as any);
+
+        return () => {
+            console.log('[Users] Unsubscribing from WebSocket');
+            socketService.off('dashboard:realtime:update', handleRealtime as any);
+        };
     }, []);
 
     const handleOpenCreateModal = () => {
@@ -380,6 +443,8 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                                 <TableHead className="font-semibold text-slate-600">Usuario</TableHead>
                                 <TableHead className="font-semibold text-slate-600">Rol</TableHead>
                                 <TableHead className="font-semibold text-slate-600">Estado</TableHead>
+                                <TableHead className="font-semibold text-slate-600">Extensión</TableHead>
+                                <TableHead className="font-semibold text-slate-600">Ext. Estado</TableHead>
                                 <TableHead className="font-semibold text-slate-600">Creado</TableHead>
                                 <TableHead className="font-semibold text-slate-600">API Token</TableHead>
                                 <TableHead className="text-right font-semibold text-slate-600">Acciones</TableHead>
@@ -388,7 +453,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                         <TableBody>
                             {isLoading ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-48 text-center text-slate-500">
+                                    <TableCell colSpan={8} className="h-48 text-center text-slate-500">
                                         <div className="flex flex-col items-center justify-center space-y-3">
                                             <RefreshCw className="w-6 h-6 animate-spin text-slate-400" />
                                             <p>Cargando usuarios...</p>
@@ -397,7 +462,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                                 </TableRow>
                             ) : filteredUsers.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-48 text-center text-slate-500">
+                                    <TableCell colSpan={8} className="h-48 text-center text-slate-500">
                                         No se encontraron usuarios que coincidan con la búsqueda.
                                     </TableCell>
                                 </TableRow>
@@ -428,6 +493,30 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                                             >
                                                 {user.active ? 'Activo' : 'Inactivo'}
                                             </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            {user.sip_extension ? (
+                                                <code className="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded font-mono">
+                                                    {user.sip_extension}
+                                                </code>
+                                            ) : (
+                                                <span className="text-xs text-slate-400 italic">Sin extensión</span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell>
+                                            {user.sip_extension ? (
+                                                <Badge
+                                                    variant="secondary"
+                                                    className={user.extension_status === 'Online'
+                                                        ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100/80"
+                                                        : "bg-slate-100 text-slate-500 hover:bg-slate-100/80"
+                                                    }
+                                                >
+                                                    {user.extension_status === 'Online' ? 'Online' : 'Offline'}
+                                                </Badge>
+                                            ) : (
+                                                <span className="text-xs text-slate-400">-</span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-slate-500 text-sm">
                                             {new Date(user.created_at).toLocaleDateString()}

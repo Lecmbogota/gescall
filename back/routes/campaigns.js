@@ -8,7 +8,7 @@ const pgDatabaseService = require('../services/pgDatabaseService');
 router.get('/', async (req, res) => {
     try {
         const { campaign_id, allowed_campaigns } = req.query;
-        let query = 'SELECT c.*, (SELECT COUNT(*) FROM gescall_campaign_agents a WHERE a.campaign_id = c.campaign_id) as agent_count FROM gescall_campaigns c';
+        let query = 'SELECT c.*, (SELECT COUNT(*) FROM gescall_user_campaigns a WHERE a.campaign_id = c.campaign_id) as agent_count FROM gescall_campaigns c';
         let params = [];
 
         if (campaign_id) {
@@ -206,7 +206,12 @@ router.get('/:campaign_id/stats', async (req, res) => {
                 lead_structure_schema: campQuery.rows[0].lead_structure_schema || [],
                 alt_phone_enabled: campQuery.rows[0].alt_phone_enabled || false,
                 campaign_type: campQuery.rows[0].campaign_type || 'BLASTER',
-                trunk_id: campQuery.rows[0].trunk_id || null
+                trunk_id: campQuery.rows[0].trunk_id || null,
+                moh_class: campQuery.rows[0].moh_class || null,
+                moh_custom_file: campQuery.rows[0].moh_custom_file || null,
+                predictive_target_drop_rate: parseFloat(campQuery.rows[0].predictive_target_drop_rate) || 0.03,
+                predictive_min_factor: parseFloat(campQuery.rows[0].predictive_min_factor) || 1.0,
+                predictive_max_factor: parseFloat(campQuery.rows[0].predictive_max_factor) || 4.0
             }
         });
     } catch (error) {
@@ -217,7 +222,7 @@ router.get('/:campaign_id/stats', async (req, res) => {
 router.post('/:campaign_id/call-log', async (req, res) => {
     try {
         const { campaign_id } = req.params;
-        const { startDatetime, endDatetime } = req.body;
+        const { startDatetime, endDatetime, call_direction } = req.body;
 
         let query = `
             SELECT 
@@ -230,24 +235,39 @@ router.post('/:campaign_id/call-log', async (req, res) => {
                 cl.call_status, 
                 cl.call_duration as length_in_sec, 
                 cl.dtmf_pressed, 
-                cl.transferred_to as agent,
+                COALESCE(tr.agent_username, cl.transferred_to) as agent_username,
+                cl.typification_id,
+                t.name as typification_name,
+                tr.form_data as typification_data,
+                COALESCE(cl.call_direction, 'OUTBOUND') as call_direction,
                 ROW_NUMBER() OVER (PARTITION BY cl.lead_id ORDER BY cl.call_date ASC) as attempt_number,
                 l.status,
                 l.vendor_lead_code,
                 l.called_count,
                 l.tts_vars,
                 ls.list_name,
-                ls.list_name as list_description
+                ls.list_name as list_description,
+                cl.uniqueid
             FROM gescall_call_log cl
-            LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id
+            LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id AND cl.lead_id > 0
             LEFT JOIN gescall_lists ls ON cl.list_id = ls.list_id
+            LEFT JOIN gescall_typifications t ON cl.typification_id = t.id
+            LEFT JOIN gescall_typification_results tr ON cl.log_id = tr.call_log_id
             WHERE cl.campaign_id = $1
         `;
         let params = [campaign_id];
+        let paramIndex = 2;
 
         if (startDatetime && endDatetime) {
-            query += ` AND cl.call_date BETWEEN $2 AND $3`;
+            query += ` AND cl.call_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
             params.push(startDatetime, endDatetime);
+            paramIndex += 2;
+        }
+
+        if (call_direction) {
+            query += ` AND COALESCE(cl.call_direction, 'OUTBOUND') = $${paramIndex}`;
+            params.push(call_direction);
+            paramIndex++;
         }
 
         query += ` ORDER BY cl.call_date DESC`;
@@ -525,6 +545,93 @@ router.put('/:campaign_id/retry-settings', async (req, res) => {
     }
 });
 
+// ==================== MOH (Música en Espera) ====================
+
+router.put('/:campaign_id/moh', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const { moh_class, moh_custom_file } = req.body;
+
+        // Validate: either moh_class or moh_custom_file, or both null to reset
+        const updates = [];
+        const params = [];
+        
+        if (moh_class !== undefined) {
+            updates.push(`moh_class = $${updates.length + 1}`);
+            params.push(moh_class || null);
+        }
+        if (moh_custom_file !== undefined) {
+            updates.push(`moh_custom_file = $${updates.length + 1}`);
+            params.push(moh_custom_file || null);
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ success: false, error: 'Se requiere moh_class o moh_custom_file' });
+        }
+
+        params.push(campaign_id);
+        const paramIdx = params.length;
+
+        await pg.query(
+            `UPDATE gescall_campaigns SET ${updates.join(', ')} WHERE campaign_id = $${paramIdx}`,
+            params
+        );
+
+        console.log(`[pg_campaigns] Campaign ${campaign_id} MOH updated:`, { moh_class, moh_custom_file });
+
+        res.json({
+            success: true,
+            message: 'Música en espera actualizada',
+            data: { moh_class, moh_custom_file }
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] MOH Update Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== PREDICTIVE SETTINGS ====================
+
+router.put('/:campaign_id/predictive', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const { predictive_target_drop_rate, predictive_min_factor, predictive_max_factor } = req.body;
+
+        const updates = [];
+        const params = [];
+
+        if (predictive_target_drop_rate !== undefined && predictive_target_drop_rate !== null) {
+            updates.push(`predictive_target_drop_rate = $${updates.length + 1}`);
+            params.push(parseFloat(predictive_target_drop_rate));
+        }
+        if (predictive_min_factor !== undefined && predictive_min_factor !== null) {
+            updates.push(`predictive_min_factor = $${updates.length + 1}`);
+            params.push(parseFloat(predictive_min_factor));
+        }
+        if (predictive_max_factor !== undefined && predictive_max_factor !== null) {
+            updates.push(`predictive_max_factor = $${updates.length + 1}`);
+            params.push(parseFloat(predictive_max_factor));
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ success: false, error: 'Se requiere al menos un campo predictivo' });
+        }
+
+        params.push(campaign_id);
+        const paramIdx = params.length;
+
+        await pg.query(
+            `UPDATE gescall_campaigns SET ${updates.join(', ')} WHERE campaign_id = $${paramIdx}`,
+            params
+        );
+
+        res.json({ success: true, message: 'Configuración predictiva actualizada' });
+    } catch (error) {
+        console.error('[pg_campaigns] Predictive settings error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // ==================== CALLERID SETTINGS ====================
 
 router.get('/:campaign_id/callerid-settings', async (req, res) => {
@@ -626,7 +733,8 @@ router.post('/consolidated', async (req, res) => {
                 l.called_count,
                 l.tts_vars,
                 ls.list_name,
-                ls.list_name as list_description
+                ls.list_name as list_description,
+                cl.uniqueid
             FROM gescall_call_log cl
             LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id
             LEFT JOIN gescall_lists ls ON cl.list_id = ls.list_id
@@ -736,7 +844,7 @@ router.post('/consolidated-stats', async (req, res) => {
 
 router.post('/create', async (req, res) => {
     try {
-        const { campaign_name, dial_prefix = '52', auto_dial_level = 1.0, max_retries = 3, campaign_cid = '0000000000', campaign_type = 'BLASTER' } = req.body;
+        const { campaign_name, dial_prefix = '52', auto_dial_level = 1.0, max_retries = 3, campaign_cid = '0000000000', campaign_type = 'BLASTER', predictive_target_drop_rate = 0.03, predictive_min_factor = 1.0, predictive_max_factor = 4.0 } = req.body;
 
         if (!campaign_name) {
             return res.status(400).json({ success: false, error: 'campaign_name es requerido' });
@@ -763,9 +871,9 @@ router.post('/create', async (req, res) => {
 
         // Insert into gescall_campaigns
         await pg.query(
-            `INSERT INTO gescall_campaigns (campaign_id, campaign_name, active, archived, dial_prefix, dial_method, auto_dial_level, max_retries, campaign_cid, campaign_type)
-             VALUES ($1, $2, false, false, $3, 'RATIO', $4, $5, $6, $7)`,
-            [cid, cname, dial_prefix, auto_dial_level, max_retries, campaign_cid, campaign_type]
+            `INSERT INTO gescall_campaigns (campaign_id, campaign_name, active, archived, dial_prefix, dial_method, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor)
+             VALUES ($1, $2, false, false, $3, 'RATIO', $4, $5, $6, $7, $8, $9, $10)`,
+            [cid, cname, dial_prefix, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor]
         );
 
         // Create a user assigned to this campaign
@@ -836,7 +944,7 @@ router.get('/:id/agents', async (req, res) => {
   try {
     const campaignId = req.params.id;
     const { rows } = await pg.query(
-      `SELECT username FROM gescall_campaign_agents WHERE campaign_id = $1`,
+      `SELECT u.username FROM gescall_user_campaigns uc JOIN gescall_users u ON uc.user_id = u.user_id WHERE uc.campaign_id = $1`,
       [campaignId]
     );
     res.json({ success: true, agents: rows.map(r => r.username) });
@@ -851,14 +959,17 @@ router.post('/:id/agents', async (req, res) => {
     const { agents } = req.body; // Array of usernames
     
     await pg.query('BEGIN');
-    await pg.query('DELETE FROM gescall_campaign_agents WHERE campaign_id = $1', [campaignId]);
+    await pg.query('DELETE FROM gescall_user_campaigns WHERE campaign_id = $1', [campaignId]);
     
     if (agents && agents.length > 0) {
       for (const username of agents) {
-        await pg.query(
-          'INSERT INTO gescall_campaign_agents (campaign_id, username) VALUES ($1, $2)',
-          [campaignId, username]
-        );
+        const { rows } = await pg.query('SELECT user_id FROM gescall_users WHERE username = $1', [username]);
+        if (rows.length > 0) {
+          await pg.query(
+            'INSERT INTO gescall_user_campaigns (campaign_id, user_id) VALUES ($1, $2)',
+            [campaignId, rows[0].user_id]
+          );
+        }
       }
     }
     await pg.query('COMMIT');
@@ -876,10 +987,10 @@ router.get('/:id/agent-status', async (req, res) => {
     
     // 1. Get assigned agents
     const { rows } = await pg.query(
-      `SELECT a.username 
-       FROM gescall_campaign_agents a
-       JOIN gescall_users u ON a.username = u.username
-       WHERE a.campaign_id = $1`,
+      `SELECT u.username 
+       FROM gescall_user_campaigns uc
+       JOIN gescall_users u ON uc.user_id = u.user_id
+       WHERE uc.campaign_id = $1`,
       [campaignId]
     );
 
@@ -887,23 +998,228 @@ router.get('/:id/agent-status', async (req, res) => {
       return res.json({ success: true, agents: [] });
     }
 
-    // 2. Fetch their states from Redis
+    // 2. Fetch their states from Redis (resilient per-key)
     const agents = [];
     for (const row of rows) {
-      const stateMap = await redis.hGetAll(`gescall:agent:${row.username}`);
-      console.log(`[DEBUG] stateMap for ${row.username}:`, stateMap);
-      agents.push({
-        username: row.username,
-        name: row.username,
-        state: stateMap.state || 'OFFLINE',
-        lastChange: parseInt(stateMap.last_change || '0')
-      });
+      try {
+        const stateMap = await redis.hGetAll(`gescall:agent:${row.username}`);
+        agents.push({
+          username: row.username,
+          name: row.username,
+          state: stateMap?.state || 'OFFLINE',
+          lastChange: parseInt(stateMap?.last_change || '0')
+        });
+      } catch (redisErr) {
+        // Single-key failure shouldn't block the entire response
+        agents.push({
+          username: row.username,
+          name: row.username,
+          state: 'OFFLINE',
+          lastChange: 0
+        });
+      }
     }
 
     res.json({ success: true, agents });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// ==================== RECORDING SETTINGS ====================
+
+// Update recording settings for a campaign
+router.put('/:id/recording-settings', async (req, res) => {
+    /*  #swagger.tags = ['Campaigns']
+        #swagger.description = 'Actualiza la configuración de grabación de llamadas de una campaña.'
+        #swagger.parameters['body'] = {
+            in: 'body',
+            required: true,
+            schema: {
+                recording_settings: {
+                    enabled: true,
+                    storage: 'local',
+                    filename_pattern: '{campaign_name}_{date}_{time}'
+                }
+            }
+        }
+    */
+    try {
+        const campaignId = req.params.id;
+        const { recording_settings } = req.body;
+
+        if (!recording_settings || typeof recording_settings !== 'object') {
+            return res.status(400).json({ success: false, error: 'recording_settings es requerido y debe ser un objeto' });
+        }
+
+        await pg.query(
+            `UPDATE gescall_campaigns SET recording_settings = $1::jsonb WHERE campaign_id = $2`,
+            [JSON.stringify(recording_settings), campaignId]
+        );
+
+        res.json({ success: true, message: 'Configuración de grabación actualizada' });
+    } catch (error) {
+        console.error('[recording-settings] Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Test remote storage connection
+router.post('/:id/recording-test-connection', async (req, res) => {
+    /*  #swagger.tags = ['Campaigns']
+        #swagger.description = 'Prueba la conexión al destino de almacenamiento externo configurado.'
+        #swagger.parameters['body'] = {
+            in: 'body',
+            required: true,
+            schema: {
+                external_type: 'sftp',
+                host: '192.168.1.100',
+                port: 22,
+                username: 'user',
+                password: 'pass',
+                access_key: '',
+                secret_key: '',
+                region: 'us-east-1',
+                bucket: 'my-bucket'
+            }
+        }
+    */
+    try {
+        const { external_type, host, port, username, password, access_key, secret_key, region, bucket } = req.body;
+
+        if (!external_type || !host) {
+            return res.status(400).json({ success: false, error: 'external_type y host son requeridos' });
+        }
+
+        const connPort = parseInt(port) || (external_type === 'sftp' ? 22 : external_type === 'ftp' ? 21 : 443);
+
+        if (external_type === 'sftp') {
+            const { Client } = require('ssh2');
+            const conn = new Client();
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    conn.end();
+                    reject(new Error('Timeout de conexión (10s)'));
+                }, 10000);
+
+                conn.on('ready', () => {
+                    clearTimeout(timeout);
+                    conn.end();
+                    resolve(true);
+                });
+
+                conn.on('error', (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                });
+
+                conn.connect({
+                    host: host,
+                    port: connPort,
+                    username: username || 'anonymous',
+                    password: password || undefined,
+                    readyTimeout: 10000,
+                });
+            });
+
+            res.json({ success: true, message: 'Conexión SFTP exitosa' });
+
+        } else if (external_type === 'ftp') {
+            const net = require('net');
+            await new Promise((resolve, reject) => {
+                const socket = new net.Socket();
+                const timeout = setTimeout(() => {
+                    socket.destroy();
+                    reject(new Error('Timeout de conexión (10s)'));
+                }, 10000);
+
+                socket.connect(connPort, host, () => {
+                    clearTimeout(timeout);
+                    socket.destroy();
+                    resolve(true);
+                });
+
+                socket.on('error', (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                });
+            });
+
+            res.json({ success: true, message: 'Conexión FTP exitosa (puerto alcanzable)' });
+
+        } else if (external_type === 's3') {
+            if (!access_key || !secret_key || !region || !bucket) {
+                return res.status(400).json({ success: false, error: 'Access Key, Secret Key, Región y Bucket son requeridos para S3' });
+            }
+
+            const https = require('https');
+            const crypto = require('crypto');
+
+            const service = 's3';
+            const hostname = `${bucket}.s3.${region}.amazonaws.com`;
+
+            // Build a minimal AWS Signature V4 signed request
+            const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+            const dateStamp = amzDate.substring(0, 8);
+            const method = 'HEAD';
+            const canonicalUri = '/';
+            const canonicalQuerystring = '';
+            const canonicalHeaders = `host:${hostname}\n`;
+            const signedHeaders = 'host';
+            const payloadHash = crypto.createHash('sha256').update('').digest('hex');
+            const canonicalRequest = `${method}\n${canonicalUri}\n${canonicalQuerystring}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+            const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+            const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${credentialScope}\n${crypto.createHash('sha256').update(canonicalRequest).digest('hex')}`;
+
+            const kDate = crypto.createHmac('sha256', `AWS4${secret_key}`).update(dateStamp).digest();
+            const kRegion = crypto.createHmac('sha256', kDate).update(region).digest();
+            const kService = crypto.createHmac('sha256', kRegion).update(service).digest();
+            const kSigning = crypto.createHmac('sha256', kService).update('aws4_request').digest();
+            const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+
+            const authorization = `AWS4-HMAC-SHA256 Credential=${access_key}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+            await new Promise((resolve, reject) => {
+                const options = {
+                    hostname,
+                    port: 443,
+                    method,
+                    path: '/',
+                    headers: {
+                        Host: hostname,
+                        'X-Amz-Date': amzDate,
+                        Authorization: authorization,
+                    },
+                    timeout: 10000,
+                };
+
+                const req = https.request(options, (httpRes) => {
+                    // 2xx or 403 (forbidden but bucket exists) both mean the bucket is reachable
+                    if (httpRes.statusCode >= 200 && httpRes.statusCode < 500) {
+                        resolve(true);
+                    } else {
+                        reject(new Error(`S3 respondió con código ${httpRes.statusCode}`));
+                    }
+                });
+
+                req.on('error', (err) => reject(err));
+                req.on('timeout', () => {
+                    req.destroy();
+                    reject(new Error('Timeout de conexión (10s)'));
+                });
+                req.end();
+            });
+
+            res.json({ success: true, message: 'Conexión S3 exitosa (bucket alcanzable)' });
+
+        } else {
+            return res.status(400).json({ success: false, error: `Tipo de conexión no soportado: ${external_type}` });
+        }
+    } catch (error) {
+        console.error('[recording-test-connection] Error:', error.message);
+        res.status(200).json({ success: false, error: error.message || 'Error al probar la conexión' });
+    }
 });
 
 module.exports = router;

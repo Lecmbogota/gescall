@@ -301,10 +301,10 @@ class ApiService {
   }
 
   // NEW: Call log from gescall_call_log table (correct pool CallerID)
-  async getCampaignCallLog(campaignId: string, startDatetime: string, endDatetime: string, limit = 500000) {
+  async getCampaignCallLog(campaignId: string, startDatetime: string, endDatetime: string, limit = 500000, callDirection?: string) {
     return this.request(`/campaigns/${campaignId}/call-log`, {
       method: 'POST',
-      body: JSON.stringify({ startDatetime, endDatetime, limit }),
+      body: JSON.stringify({ startDatetime, endDatetime, limit, call_direction: callDirection }),
     });
   }
 
@@ -386,6 +386,17 @@ class ApiService {
     });
   }
 
+  async updateCampaignPredictive(campaignId: string, settings: {
+    predictive_target_drop_rate?: number;
+    predictive_min_factor?: number;
+    predictive_max_factor?: number;
+  }) {
+    return this.request(`/campaigns/${campaignId}/predictive`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    });
+  }
+
   async updateCampaignAltPhone(campaignId: string, enabled: boolean) {
     return this.request(`/campaigns/${campaignId}/alt-phone`, {
       method: 'PUT',
@@ -416,6 +427,113 @@ class ApiService {
     return this.request(`/campaigns/${campaignId}/tts_templates`, {
       method: 'PUT',
       body: JSON.stringify({ templates }),
+    });
+  }
+
+  // MOH (Music on Hold)
+  async getMohClasses() {
+    return this.request('/audio/moh-classes');
+  }
+
+  async updateCampaignMoh(campaignId: string, data: { moh_class?: string | null; moh_custom_file?: string | null }) {
+    return this.request(`/campaigns/${campaignId}/moh`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async uploadMohAudio(file: File, campaign: string) {
+    const formData = new FormData();
+    formData.append('audio', file);
+    formData.append('campaign', campaign);
+
+    const apiUrl = this.getApiUrl();
+    const token = (() => {
+      try {
+        const authStr = localStorage.getItem('auth-storage');
+        if (authStr) return JSON.parse(authStr)?.state?.session?.token;
+      } catch {}
+      return null;
+    })();
+
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${apiUrl}/audio/moh/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al subir audio MOH');
+    }
+
+    return response.json();
+  }
+
+  async removeMohAudio(campaign: string) {
+    const apiUrl = this.getApiUrl();
+    const token = (() => {
+      try {
+        const authStr = localStorage.getItem('auth-storage');
+        if (authStr) return JSON.parse(authStr)?.state?.session?.token;
+      } catch {}
+      return null;
+    })();
+
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${apiUrl}/audio/moh/${campaign}`, {
+      method: 'DELETE',
+      headers,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Error al remover audio MOH');
+    }
+
+    return response.json();
+  }
+
+  // Recording Settings
+  async updateCampaignRecordingSettings(campaignId: string, recordingSettings: {
+    enabled: boolean;
+    storage: string;
+    external_type?: string;
+    host?: string;
+    port?: string;
+    username?: string;
+    password?: string;
+    access_key?: string;
+    secret_key?: string;
+    region?: string;
+    bucket?: string;
+    filename_pattern: string;
+  }) {
+    return this.request(`/campaigns/${campaignId}/recording-settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ recording_settings: recordingSettings }),
+    });
+  }
+
+  async testRecordingConnection(campaignId: string, data: {
+    external_type: string;
+    host: string;
+    port?: string | number;
+    username?: string;
+    password?: string;
+    access_key?: string;
+    secret_key?: string;
+    region?: string;
+    bucket?: string;
+  }) {
+    return this.request(`/campaigns/${campaignId}/recording-test-connection`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   }
 
@@ -1002,6 +1120,90 @@ class ApiService {
 
   async getSwaggerDocs() {
     return this.request('/docs.json');
+  }
+
+  // --- Typifications (Tipificaciones) ---
+  async getTypifications(campaignId: string) {
+    return this.request(`/typifications/campaigns/${campaignId}/typifications`);
+  }
+
+  async createTypification(campaignId: string, data: { name: string; category?: string; form_id?: number | null; sort_order?: number }) {
+    return this.request(`/typifications/campaigns/${campaignId}/typifications`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTypification(campaignId: string, typificationId: number, data: { name?: string; category?: string; form_id?: number | null; sort_order?: number; active?: boolean }) {
+    return this.request(`/typifications/campaigns/${campaignId}/typifications/${typificationId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTypification(campaignId: string, typificationId: number) {
+    return this.request(`/typifications/campaigns/${campaignId}/typifications/${typificationId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getTypificationForms(campaignId: string) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms`);
+  }
+
+  async createTypificationForm(campaignId: string, data: { name: string; description?: string }) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTypificationForm(campaignId: string, formId: number, data: { name?: string; description?: string }) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTypificationForm(campaignId: string, formId: number) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getFormFields(campaignId: string, formId: number) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}/fields`);
+  }
+
+  async createFormField(campaignId: string, formId: number, data: { field_name: string; field_label: string; field_type?: string; is_required?: boolean; options?: any; sort_order?: number }) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}/fields`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateFormField(campaignId: string, formId: number, fieldId: number, data: any) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}/fields/${fieldId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteFormField(campaignId: string, formId: number, fieldId: number) {
+    return this.request(`/typifications/campaigns/${campaignId}/forms/${formId}/fields/${fieldId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async submitTypification(data: { call_log_id?: number; phone_number?: string; typification_id: number; campaign_id: string; form_data?: Record<string, string>; notes?: string }) {
+    return this.request('/typifications/submit', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getCallLogTypification(logId: number) {
+    return this.request(`/typifications/call-logs/${logId}/typification`);
   }
 
   // --- Settings ---

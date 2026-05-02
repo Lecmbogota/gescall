@@ -1,9 +1,47 @@
 const uploadTaskService = require('../services/uploadTaskService');
 const pgDatabase = require('../config/pgDatabase');
+const { exec } = require('child_process');
 module.exports = function(io, { databaseService }) {
   const activeUploads = new Set();
   const pausedUploads = new Set();
   const redis = require('../config/redisClient'); // Import Redis Client
+
+  // Cache SIP extension statuses to avoid hammering Asterisk on every 5s tick
+  let extensionStatusCache = {}; // { ext: 'Online'|'Offline'|'N/A' }
+  let tickCounter = 0;
+
+  function getExtensionStatus(extension) {
+    return new Promise((resolve) => {
+      if (!extension) return resolve('N/A');
+      exec(`asterisk -rx "pjsip show endpoint ${extension}" 2>/dev/null`, (err, stdout) => {
+        if (err || !stdout) return resolve('Offline');
+        if (stdout.includes('not found') || stdout.includes('object not found') || stdout.includes('Unable to find')) {
+          resolve('Offline');
+        } else if (stdout.match(new RegExp(`Endpoint:\\s+${extension}\\s+Unavailable`))) {
+          resolve('Offline');
+        } else if (stdout.match(new RegExp(`Endpoint:\\s+${extension}\\s+(Not in use|In use|Busy|Reachable)`))) {
+          resolve('Online');
+        } else if (stdout.includes('Endpoint:')) {
+          resolve('Online');
+        } else {
+          resolve('Offline');
+        }
+      });
+    });
+  }
+
+  async function refreshExtensionCache() {
+    try {
+      const { rows } = await pgDatabase.query(
+        'SELECT username, sip_extension FROM gescall_users WHERE active = true AND sip_extension IS NOT NULL'
+      );
+      for (const user of rows) {
+        extensionStatusCache[user.username] = await getExtensionStatus(user.sip_extension);
+      }
+    } catch (e) {
+      console.error('[Socket.IO] Error refreshing extension cache:', e.message);
+    }
+  }
   
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
@@ -190,10 +228,23 @@ module.exports = function(io, { databaseService }) {
 
         await redis.hSet(`gescall:agent:${username}`, payload);
         
+        // Look up SIP extension to include status in the broadcast
+        let extensionStatus = 'N/A';
+        try {
+          const { rows: userRows } = await pgDatabase.query(
+            'SELECT sip_extension FROM gescall_users WHERE username = $1 LIMIT 1',
+            [username]
+          );
+          if (userRows.length > 0 && userRows[0].sip_extension) {
+            extensionStatus = extensionStatusCache[username] || await getExtensionStatus(userRows[0].sip_extension);
+            extensionStatusCache[username] = extensionStatus;
+          }
+        } catch (lookupErr) {}
+        
         // Global broadcast so supervisors update immediately
         io.emit('dashboard:realtime:update', { 
           timestamp: new Date().toISOString(),
-          agent_update: { username, ...payload } 
+          agent_update: { username, ...payload, extension_status: extensionStatus } 
         });
         
       } catch (err) {
@@ -210,7 +261,7 @@ module.exports = function(io, { databaseService }) {
           });
           io.emit('dashboard:realtime:update', { 
             timestamp: new Date().toISOString(),
-            agent_update: { username: socket.agentUsername, state: 'OFFLINE', last_change: Date.now() } 
+            agent_update: { username: socket.agentUsername, state: 'OFFLINE', last_change: Date.now(), extension_status: extensionStatusCache[socket.agentUsername] || 'N/A' } 
           });
         } catch (err) {
           console.error('[Socket.IO] Error on agent disconnect:', err.message);
@@ -220,23 +271,60 @@ module.exports = function(io, { databaseService }) {
   });
   
   setInterval(async () => {
+    tickCounter++;
+    const broadcast = { timestamp: new Date().toISOString() };
+    let hasData = false;
+
     try {
+      // Refresh SIP extension cache every 30s (6 ticks)
+      if (tickCounter % 6 === 0) {
+        refreshExtensionCache();
+      }
+      
       const stats = await databaseService.getDashboardStats();
+      broadcast.stats = stats;
+      hasData = true;
+    } catch (e) {
+      console.error('[Socket.IO] getDashboardStats error:', e.message);
+    }
+
+    try {
       const agents = await databaseService.getActiveAgents();
-      io.emit('dashboard:realtime:update', { timestamp: new Date().toISOString(), stats, agents });
-    } catch (e) {}
+      broadcast.agents = agents;
+      hasData = true;
+    } catch (e) {
+      console.error('[Socket.IO] getActiveAgents error:', e.message);
+    }
+
+    // Always include extension cache (may be empty on first run before 30s refresh)
+    broadcast.extensions = { ...extensionStatusCache };
+
+    if (hasData || Object.keys(extensionStatusCache).length > 0) {
+      if (tickCounter % 12 === 1) {
+        console.log(`[Socket.IO] Periodic broadcast #${tickCounter} — agents: ${(broadcast.agents || []).length}, extensions: ${Object.keys(extensionStatusCache).length}, clients: ${io.engine.clientsCount}`);
+      }
+      io.emit('dashboard:realtime:update', broadcast);
+    }
+
+    // Campaign room broadcasts
     try {
       if (io.sockets.adapter.rooms) {
         for (const [room, clients] of io.sockets.adapter.rooms.entries()) {
           if (room.startsWith('campaign:') && clients.size > 0) {
             const campaignId = room.split(':')[1];
             if (campaignId) {
-              const stats = await databaseService.getCampaignRealtimeStats(campaignId);
-              io.to(room).emit('campaign:realtime:update', stats);
+              try {
+                const stats = await databaseService.getCampaignRealtimeStats(campaignId);
+                io.to(room).emit('campaign:realtime:update', stats);
+              } catch (innerE) {
+                console.error(`[Socket.IO] campaign:${campaignId} stats error:`, innerE.message);
+              }
             }
           }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error('[Socket.IO] Campaign room broadcast error:', e.message);
+    }
   }, 5000);
 };

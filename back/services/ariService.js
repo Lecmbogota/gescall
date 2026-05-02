@@ -26,7 +26,8 @@ let io = null;
 const activeCalls = new Map(); // channelId -> { leadId, campaignId, flowState, ... }
 
 // Queue Management (Holding Bridges)
-const campaignBridges = new Map(); // campaignId -> bridgeId
+const campaignBridges = new Map(); // campaignId -> bridge (object with id, startMoh, etc.)
+const bridgeMohActive = new Map(); // campaignId -> true if MOH already started on bridge
 const queueWaiters = new Map(); // campaignId -> [{ channelId, joinTime, leadId }]
 let dispatcherInterval = null;
 
@@ -75,8 +76,8 @@ async function getOrCreateBridge(campaignId) {
     }
     try {
         const bridge = await ari.bridges.create({ type: 'holding', name: `queue_${campaignId}` });
-        campaignBridges.set(campaignId, bridge.id);
-        return bridge.id;
+        campaignBridges.set(campaignId, bridge);
+        return bridge;
     } catch (err) {
         console.error(`[ARI] Failed to create bridge for campaign ${campaignId}:`, err.message);
         return null;
@@ -95,9 +96,9 @@ async function dispatchQueues() {
             const pg = require('../config/pgDatabase');
             if (pg) {
                 const res = await pg.query(`
-                    SELECT ca.username, u.sip_extension 
-                    FROM gescall_campaign_agents ca 
-                    JOIN gescall_users u ON ca.username = u.username 
+                    SELECT u.username, u.sip_extension 
+                    FROM gescall_user_campaigns ca 
+                    JOIN gescall_users u ON ca.user_id = u.user_id 
                     WHERE ca.campaign_id = $1
                 `, [campaignId]);
                 assignedAgents = res.rows.map(r => r.username);
@@ -161,6 +162,36 @@ async function dispatchQueues() {
             console.error(`[Queue] Dispatch error for campaign ${campaignId}:`, err.message);
         }
     }
+}
+
+/**
+ * Play an audio file in a continuous loop on a channel.
+ * Listens for PlaybackFinished and re-plays the same file.
+ * Stops when the channel is hung up or no longer tracked.
+ */
+function playAudioLoop(channel, filename) {
+    const channelId = channel.id;
+    let stopped = false;
+
+    async function playOnce() {
+        if (stopped) return;
+        const cs = activeCalls.get(channelId);
+        if (!cs || cs.hungUp) {
+            stopped = true;
+            return;
+        }
+        try {
+            const playback = await channel.play({ media: `sound:${filename.replace(/\.\w+$/, '')}` });
+            playback.on('PlaybackFinished', () => {
+                if (!stopped) playOnce();
+            });
+        } catch (e) {
+            // Channel might be gone — stop looping
+            stopped = true;
+        }
+    }
+
+    playOnce();
 }
 
 // ─── STASIS EVENT HANDLERS ───────────────────────────────────────
@@ -337,6 +368,11 @@ async function handleStasisStart(event, channel) {
 
                 await mixingBridge.addChannel({ channel: [channelId, waiterChannelId] });
                 console.log(`[Queue] Agent ${channelId} bridged with Waiter ${waiterChannelId}`);
+
+                const waiterState = activeCalls.get(waiterChannelId);
+                if (waiterState) {
+                    waiterState.dispatched = true;
+                }
                 
                 // Update agent state to ON_CALL
                 const agentVar = await channel.getChannelVar({ variable: 'agent_username' });
@@ -541,6 +577,61 @@ async function handleStasisStart(event, channel) {
 
         console.log(`[ARI] Campaign: ${campaignId}, Transfer: ${transferNumber}, Custom Vars: ${Object.keys(customVars).length}`);
 
+        // Load MOH and Recording settings for campaign
+        let mohClass = null;
+        let mohCustomFile = null;
+        let recordingFilename = null;
+        if (campaignId) {
+            try {
+                const mohRows = await pg.query(
+                    `SELECT moh_class, moh_custom_file, recording_settings, campaign_name FROM gescall_campaigns WHERE campaign_id = $1 LIMIT 1`,
+                    [campaignId]
+                );
+                if (mohRows.rows.length > 0) {
+                    mohClass = (mohRows.rows[0].moh_class || '').trim() || null;
+                    mohCustomFile = (mohRows.rows[0].moh_custom_file || '').trim() || null;
+                    
+                    // Resolve recording filename pattern
+                    const recSettings = mohRows.rows[0].recording_settings || {};
+                    if (recSettings.enabled !== false && recSettings.filename_pattern) {
+                        const campaignName = (mohRows.rows[0].campaign_name || campaignId).replace(/\s+/g, '_');
+                        
+                        // Get timezone from system settings, default America/Bogota
+                        let tz = 'America/Bogota';
+                        try {
+                            const tzRows = await pg.query(
+                                `SELECT setting_value FROM gescall_settings WHERE setting_key = 'timezone' LIMIT 1`
+                            );
+                            if (tzRows.rows.length > 0 && tzRows.rows[0].setting_value) {
+                                tz = tzRows.rows[0].setting_value;
+                            }
+                        } catch (e) { /* use default */ }
+
+                        // Format date/time in campaign timezone
+                        const now = new Date();
+                        const localeDate = now.toLocaleDateString('fr-CA', { timeZone: tz }); // YYYY-MM-DD
+                        const localeTime = now.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false }); // HH:MM:SS
+                        const dateStr = localeDate; // YYYY-MM-DD
+                        const timeStr = localeTime.replace(/:/g, '-'); // HH-MM-SS
+                        const srcNumber = callerIdName || 'unknown';
+                        const channelUniqueId = channelId; // Asterisk unique ID
+                        
+                        recordingFilename = recSettings.filename_pattern
+                            .replace(/\{campaign_name\}/g, campaignName)
+                            .replace(/\{date\}/g, dateStr)
+                            .replace(/\{time\}/g, timeStr)
+                            .replace(/\{src_number\}/g, srcNumber)
+                            .replace(/\{dst_number\}/g, phoneNumber || srcNumber)
+                            + '_' + channelUniqueId; // Always append unique ID for uniqueness
+                        
+                        console.log(`[ARI] Recording filename resolved: ${recordingFilename}`);
+                    }
+                }
+            } catch (e) {
+                console.log(`[ARI] Could not load MOH/recording settings for campaign ${campaignId}:`, e.message);
+            }
+        }
+
         // Load IVR flow for campaign
         let flow = null;
         if (campaignId) {
@@ -592,7 +683,13 @@ async function handleStasisStart(event, channel) {
             startTime: Date.now(),
             executionLog: [], // Keep track of node executions for n8n style view
             isNative, // Flag indicating if call uses PostgreSQL
-            trunkId: customVars['trunk_id'] || null
+            trunkId: customVars['trunk_id'] || null,
+            recordingFilename, // Resolved recording filename from campaign settings
+            mohClass,
+            mohCustomFile,
+            campaignType,
+            queued: false,
+            dispatched: false
         };
 
         // Attach custom properties as var_{PROPERTY} for replaceVars
@@ -613,14 +710,49 @@ async function handleStasisStart(event, channel) {
         if (campaignType === 'OUTBOUND_PREDICTIVE' || campaignType === 'OUTBOUND_PROGRESSIVE' || campaignType === 'INBOUND') {
             // Direct to Queue Holding Bridge
             console.log(`[ARI] ${campaignType} call ${channelId} sending to Holding Bridge`);
-            const bridgeId = await getOrCreateBridge(campaignId);
-            if (bridgeId) {
-                await ari.bridges.addChannel({ bridgeId, channel: channelId });
+            console.log(`[ARI] DEBUG mohClass="${mohClass}" mohCustomFile="${mohCustomFile}" campaignId="${campaignId}"`);
+            const bridge = await getOrCreateBridge(campaignId);
+            console.log(`[ARI] DEBUG getOrCreateBridge returned: ${bridge ? 'bridge.id=' + bridge.id : 'NULL'}`);
+            if (bridge) {
+                console.log(`[ARI] DEBUG calling bridge.addChannel for channel ${channelId} to bridge ${bridge.id}`);
+                try {
+                    await Promise.race([
+                        ari.bridges.addChannel({ bridgeId: bridge.id, channel: channelId }),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Bridge addChannel timeout (10s)')), 10000))
+                    ]);
+                    console.log(`[ARI] DEBUG bridge.addChannel completed for channel ${channelId}`);
+                } catch (addErr) {
+                    console.error(`[ARI] ERROR bridge.addChannel failed for channel ${channelId}: ${addErr.message}`);
+                    // Destroy the broken bridge so a fresh one gets created next time
+                    try { 
+                        campaignBridges.delete(campaignId);
+                        bridgeMohActive.delete(campaignId);
+                        await ari.bridges.destroy({ bridgeId: bridge.id }); 
+                    } catch (e) { /* ignore */ }
+                    throw addErr;
+                }
                 if (!queueWaiters.has(campaignId)) queueWaiters.set(campaignId, []);
                 queueWaiters.get(campaignId).push({ channelId, joinTime: Date.now(), leadId, phoneNumber: stateObj.phone || '' });
-                // Optionally play MOH on channel
-                try { await channel.play({ media: 'sound:default' }); } catch(e){}
+                stateObj.queued = true;
+                stateObj.dispatched = false;
+                // Start MOH on the bridge (only once — the bridge keeps playing for all waiters)
+                try {
+                    console.log(`[ARI] DEBUG bridgeMohActive=${bridgeMohActive.get(campaignId)} mohClass="${mohClass}"`);
+                    if (!bridgeMohActive.get(campaignId)) {
+                        if (mohClass) {
+                            console.log(`[ARI] DEBUG calling bridge.startMoh with mohClass="${mohClass}"`);
+                            await bridge.startMoh({ mohClass });
+                            bridgeMohActive.set(campaignId, true);
+                            console.log(`[ARI] Bridge MOH started with class "${mohClass}" for campaign ${campaignId}`);
+                        } else {
+                            console.log(`[ARI] DEBUG no mohClass set, using default holding bridge MOH`);
+                        }
+                    }
+                } catch(e) {
+                    console.error(`[ARI] Failed to start MOH on bridge for ${campaignId}:`, e.message);
+                }
             } else {
+                console.log(`[ARI] DEBUG bridge is NULL, hanging up`);
                 await channel.hangup();
             }
         } else if (flow && flow.nodes && flow.edges) {
@@ -658,6 +790,11 @@ function handleStasisEnd(event, channel) {
         // Resolve any pending DTMF wait
         if (callState.dtmfResolve) {
             callState.dtmfResolve({ digit: null, hangup: true });
+        }
+
+        if (callState.queued && !callState.dispatched && callState.campaignType === 'OUTBOUND_PREDICTIVE') {
+            callState.callOutcome = 'PDROP';
+            console.log(`[ARI] Call ${channelId} marked as PDROP — predictive drop (channel hung up before agent dispatch)`);
         }
 
         // Log to gescall_call_log
@@ -1843,7 +1980,7 @@ async function logCallResult(callState) {
             try {
                 // Find the campaign-scoped call key (format: gescall:call:CAMPAIGN:channelId)
                 const callKeys = await redis.keys(`gescall:call:*:${channelId}`);
-                const callKey = callKeys && callKeys.length > 0 ? callKeys[0] : `gescall:call:${channelId}`;
+                const callKey = callKeys && callKeys.length > 0 ? callKeys[0] : `gescall:call:${callState.campaignId || 'INBOUND'}:${channelId}`;
                 await redis.hSet(callKey, {
                     final_status: status,
                     final_dtmf: callState.dtmfBuffer || '0',
@@ -1856,6 +1993,20 @@ async function logCallResult(callState) {
         }
 
         console.log(`[ARI] Call outcome: lead=${callState.leadId}, status=${status}, dtmf=${callState.dtmfBuffer}, duration=${duration}s`);
+
+        if (callState.campaignId && callState.campaignType === 'OUTBOUND_PREDICTIVE') {
+            try {
+                await redis.incr(`gescall:pstats:${callState.campaignId}:attempts`);
+                if (['ANSWER', 'XFER', 'SALE', 'PU', 'PM'].includes(status)) {
+                    await redis.incr(`gescall:pstats:${callState.campaignId}:answers`);
+                }
+                if (status === 'PDROP') {
+                    await redis.incr(`gescall:pstats:${callState.campaignId}:drops`);
+                }
+            } catch (e) {
+                console.error(`[ARI] Failed to update predictive stats in Redis:`, e.message);
+            }
+        }
 
         // Log full IVR execution path (n8n style) — this is unique to ariService
         if (callState.campaignId && callState.executionLog && callState.executionLog.length > 0) {
@@ -1900,6 +2051,9 @@ async function logCallResult(callState) {
                 console.error(`[ARI] Failed to insert executions:`, dbErr.message);
             }
         }
+
+        // Also ensure the call outcome is written to gescall_call_log (vital for inbound calls that lack a DIALING record)
+        await logToGescall(callState, status, callState.dtmfBuffer, duration);
     } catch (err) {
         console.error(`[ARI] Log error:`, err.message);
     }
@@ -1909,9 +2063,14 @@ async function logToGescall(callState, status, dtmf, duration) {
     // Normalize raw Asterisk channel states using centralized mapping
     status = fromAsteriskState(status) !== STATUS.DROP ? fromAsteriskState(status) : status;
 
-    if (callState.leadId <= 0) return;
+    // Allow leadId=0 for inbound calls (they don't have a lead)
+    // Still skip negative leadIds or calls without DB access
+    if (callState.leadId < 0) return;
     if (!callState.isNative && !db) return;
     duration = duration || Math.floor((Date.now() - callState.startTime) / 1000);
+
+    // Determine call direction from campaign type
+    const callDirection = (callState.campaignType === 'INBOUND') ? 'INBOUND' : 'OUTBOUND';
 
     try {
         let phone = callState.phone || '';
@@ -1964,21 +2123,43 @@ async function logToGescall(callState, status, dtmf, duration) {
 
         if (callState.isNative) {
             const pg = require('../config/pgDatabase');
+            const channelId = callState.channel?.id || '';
             const pgUpdateResult = await pg.query(
                 `UPDATE gescall_call_log 
-                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4)
+                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7)
                  WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
                  RETURNING log_id`,
-                [status, dtmf || '0', duration, callState.trunkId, callState.leadId]
+                [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId]
             );
 
             if (pgUpdateResult.rowCount === 0) {
                 await pg.query(
                     `INSERT INTO gescall_call_log
-                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id)
-                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8)`,
-                    [callState.leadId, phone, callState.campaignId, callState.listId, status, duration, dtmf || '0', callState.trunkId]
+                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id, call_direction, uniqueid)
+                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10)`,
+                    [callState.leadId || 0, phone, callState.campaignId, callState.listId || 0, status, duration, dtmf || '0', callState.trunkId, callDirection, channelId]
                 );
+            }
+
+            // Rename recording file to campaign naming pattern
+            if (callState.recordingFilename && channelId) {
+                const fs = require('fs');
+                const recPath = '/var/spool/asterisk/recording';
+                const srcFile = path.join(recPath, `${channelId}.wav`);
+                const dstFile = path.join(recPath, `${callState.recordingFilename}.wav`);
+                try {
+                    if (fs.existsSync(srcFile)) {
+                        fs.renameSync(srcFile, dstFile);
+                        console.log(`[ARI] Recording renamed: ${channelId}.wav → ${callState.recordingFilename}.wav`);
+                        // Update uniqueid in call log to the new filename
+                        await pg.query(
+                            `UPDATE gescall_call_log SET uniqueid = $1 WHERE uniqueid = $2 AND call_date >= NOW() - INTERVAL '10 minutes'`,
+                            [callState.recordingFilename, channelId]
+                        );
+                    }
+                } catch (renameErr) {
+                    console.error(`[ARI] Failed to rename recording: ${renameErr.message}`);
+                }
             }
         } else {
             // UPDATE-first: try to update existing DIALING/IVR_START record from aleatorio_callerid.agi
@@ -1997,7 +2178,7 @@ async function logToGescall(callState, status, dtmf, duration) {
                     `INSERT INTO gescall_call_log
                      (lead_id, phone_number, vendor_lead_code, pool_callerid, campaign_id, list_id, call_date, call_status, dtmf_pressed, call_duration)
                      VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
-                    [callState.leadId, phone, vlc, poolCid, callState.campaignId, callState.listId, status, dtmf || '0', duration]
+                    [callState.leadId || 0, phone, vlc, poolCid, callState.campaignId, callState.listId || 0, status, dtmf || '0', duration]
                 );
             }
         }

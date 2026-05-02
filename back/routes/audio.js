@@ -469,4 +469,267 @@ router.get('/:filename/stream', (req, res) => {
     conn.connect(sshConfig);
 });
 
+// ─────────────────── CALL RECORDINGS ───────────────────
+
+/**
+ * GET /api/audio/recordings/:filename
+ * Stream call recording from Asterisk
+ */
+router.get('/recordings/:filename', (req, res) => {
+    const { filename } = req.params;
+
+    if (filename.includes('/') || filename.includes('..')) {
+        return res.status(400).send('Invalid filename');
+    }
+
+    const recordingsPath = '/var/spool/asterisk/recording';
+    const remotePath = path.join(recordingsPath, filename);
+    const conn = new Client();
+
+    conn.on('ready', () => {
+        conn.sftp((err, sftp) => {
+            if (err) {
+                conn.end();
+                console.error('[Audio] Recordings SFTP error:', err);
+                return res.status(500).send('SFTP Error');
+            }
+
+            sftp.stat(remotePath, (err, stats) => {
+                if (err) {
+                    conn.end();
+                    return res.status(404).json({ success: false, error: 'Recording not found' });
+                }
+
+                res.setHeader('Content-Type', 'audio/wav');
+                res.setHeader('Content-Length', stats.size);
+                res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+                const stream = sftp.createReadStream(remotePath);
+                stream.on('error', () => conn.end());
+                stream.on('end', () => conn.end());
+
+                stream.pipe(res);
+            });
+        });
+    });
+
+    conn.on('error', (err) => {
+        console.error('[Audio] Recordings SSH error:', err);
+        if (!res.headersSent) res.status(500).send('Connection Error');
+    });
+
+    conn.connect(sshConfig);
+});
+
+// ─────────────────── MOH Classes ───────────────────
+
+/**
+ * GET /api/audio/moh-classes
+ * List available Asterisk MOH classes (local execution). Includes system classes and campaign-specific ones.
+ */
+router.get('/moh-classes', async (req, res) => {
+    try {
+        const { execSync } = require('child_process');
+        let output = '';
+        try {
+            output = execSync('asterisk -rx "moh show classes"', { timeout: 5000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch (e) {
+            output = '';
+        }
+        const classes = [];
+
+        if (output) {
+            const lines = output.split('\n');
+            for (const line of lines) {
+                const match = line.match(/^Class:\s*(\S+)/);
+                if (match) {
+                    const name = match[1];
+                    const isCustom = name.startsWith('gescall_');
+                    classes.push({
+                        name,
+                        value: name,
+                        label: isCustom ? `Personalizado (${name})` : name,
+                        isSystem: !isCustom
+                    });
+                }
+            }
+        }
+
+        if (classes.filter(c => c.isSystem).length === 0) {
+            classes.unshift(
+                { name: 'default', value: 'default', label: 'Por defecto', isSystem: true },
+                { name: 'none', value: 'none', label: 'Ninguna (silencio)', isSystem: true }
+            );
+        }
+
+        res.json({ success: true, data: classes });
+    } catch (error) {
+        console.error('[Audio] MOH classes error:', error.message);
+        res.json({
+            success: true,
+            data: [
+                { name: 'default', value: 'default', label: 'Por defecto', isSystem: true },
+                { name: 'none', value: 'none', label: 'Ninguna (silencio)', isSystem: true }
+            ]
+        });
+    }
+});
+
+/**
+ * POST /api/audio/moh/upload
+ * Upload custom MOH audio: converts to 8kHz mono PCM, creates per-campaign
+ * MOH class in Asterisk, reloads res_musiconhold, and updates the campaign.
+ */
+router.post('/moh/upload', upload.single('audio'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: 'No se recibió ningún archivo' });
+        }
+
+        const localPath = req.file.path;
+        const { campaign } = req.body;
+
+        if (!campaign) {
+            try { fs.unlinkSync(localPath); } catch (e) {}
+            return res.status(400).json({ success: false, error: 'Se requiere especificar la campaña' });
+        }
+
+        const safeCampaign = campaign.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const mohClassName = `gescall_${safeCampaign}`;
+        const mohDir = `/var/lib/asterisk/moh/${mohClassName}`;
+        const finalFilename = `moh_${Date.now()}.wav`;
+        const finalPath = path.join(mohDir, finalFilename);
+
+        const { execSync } = require('child_process');
+
+        // 1. Create campaign MOH directory and clean old files
+        if (!fs.existsSync(mohDir)) {
+            fs.mkdirSync(mohDir, { recursive: true });
+        }
+        // Remove existing WAV files in this campaign's MOH dir (single-file MOH)
+        try {
+            const existing = fs.readdirSync(mohDir).filter(f => f.endsWith('.wav'));
+            for (const f of existing) fs.unlinkSync(path.join(mohDir, f));
+        } catch (e) {}
+
+        console.log(`[Audio MOH] Converting ${localPath} → ${finalPath} for MOH class ${mohClassName}`);
+
+        // 2. Convert to 8kHz mono 16-bit PCM WAV using ffmpeg
+        try {
+            execSync(
+                `ffmpeg -y -i "${localPath}" -ar 8000 -ac 1 -sample_fmt s16 "${finalPath}"`,
+                { timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] }
+            );
+        } catch (ffmpegErr) {
+            // If ffmpeg conversion fails, copy as-is
+            try { fs.copyFileSync(localPath, finalPath); } catch (e2) {}
+            console.warn('[Audio MOH] ffmpeg conversion failed, copied raw:', ffmpegErr.message);
+        }
+        fs.chmodSync(finalPath, 0o644);
+
+        // 3. Clean up temp file
+        try { fs.unlinkSync(localPath); } catch (e) {}
+
+        // 4. Update musiconhold.conf to add/ensure the campaign MOH class
+        const mohConfPath = '/etc/asterisk/musiconhold.conf';
+        let mohConf = '';
+        try { mohConf = fs.readFileSync(mohConfPath, 'utf8'); } catch (e) {}
+
+        const classHeader = `[${mohClassName}]`;
+        if (!mohConf.includes(classHeader)) {
+            const classBlock = `
+${classHeader}
+mode=files
+directory=moh/${mohClassName}
+sort=alpha
+`;
+            fs.appendFileSync(mohConfPath, classBlock);
+            console.log(`[Audio MOH] Added MOH class ${mohClassName} to musiconhold.conf`);
+        }
+
+        // 5. Reload res_musiconhold module
+        try {
+            execSync('asterisk -rx "moh reload"', { timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+            console.log('[Audio MOH] MOH module reloaded');
+        } catch (e) {
+            console.warn('[Audio MOH] MOH reload warning:', e.message);
+        }
+
+        // 6. Update the campaign's moh_class in the database
+        const pgDb = require('../config/pgDatabase');
+        await pgDb.query(
+            'UPDATE gescall_campaigns SET moh_class = $1, moh_custom_file = $2 WHERE campaign_id = $3',
+            [mohClassName, finalFilename, campaign]
+        );
+
+        console.log(`[Audio MOH] Campaign ${campaign} MOH class set to ${mohClassName}, file: ${finalFilename}`);
+
+        res.json({
+            success: true,
+            message: 'Audio MOH subido y configurado exitosamente',
+            data: {
+                filename: finalFilename,
+                path: finalPath,
+                moh_class: mohClassName,
+                moh_custom_file: finalFilename
+            }
+        });
+    } catch (error) {
+        console.error('[Audio MOH] Upload error:', error);
+        try { if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) {}
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/audio/moh/:campaign
+ * Remove custom MOH audio and revert to system default
+ */
+router.delete('/moh/:campaign', async (req, res) => {
+    try {
+        const { campaign } = req.params;
+        const safeCampaign = campaign.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const mohClassName = `gescall_${safeCampaign}`;
+        const mohDir = `/var/lib/asterisk/moh/${mohClassName}`;
+
+        // Remove MOH files
+        if (fs.existsSync(mohDir)) {
+            fs.rmSync(mohDir, { recursive: true, force: true });
+            console.log(`[Audio MOH] Removed MOH dir: ${mohDir}`);
+        }
+
+        // Remove class from musiconhold.conf
+        const mohConfPath = '/etc/asterisk/musiconhold.conf';
+        try {
+            let mohConf = fs.readFileSync(mohConfPath, 'utf8');
+            const classHeader = `[${mohClassName}]`;
+            if (mohConf.includes(classHeader)) {
+                // Remove the class block
+                const re = new RegExp(`\\n*\\[${mohClassName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\][^\\[]*`, 's');
+                mohConf = mohConf.replace(re, '');
+                fs.writeFileSync(mohConfPath, mohConf);
+                console.log(`[Audio MOH] Removed MOH class ${mohClassName} from musiconhold.conf`);
+            }
+        } catch (e) {
+            console.warn('[Audio MOH] Could not update musiconhold.conf:', e.message);
+        }
+
+        // Reload
+        const { execSync } = require('child_process');
+        try { execSync('asterisk -rx "moh reload"', { timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }); } catch (e) {}
+
+        // Revert campaign to system default
+        const pgDb = require('../config/pgDatabase');
+        await pgDb.query(
+            'UPDATE gescall_campaigns SET moh_class = NULL, moh_custom_file = NULL WHERE campaign_id = $1',
+            [campaign]
+        );
+
+        res.json({ success: true, message: 'Audio MOH removido, usando música por defecto' });
+    } catch (error) {
+        console.error('[Audio MOH] Delete error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 module.exports = router;
