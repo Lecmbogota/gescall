@@ -7,6 +7,10 @@ export interface AgentGoalRow {
   current: number;
   color: string;
   icon: 'trophy' | 'target' | 'star';
+  /** Días inclusivos hacia atrás desde hoy (1 = solo hoy) */
+  periodDays?: number;
+  /** Si la meta filtra por una tipificación, su nombre para mostrar */
+  typificationName?: string | null;
 }
 
 interface GoalsWidgetProps {
@@ -74,9 +78,21 @@ export const GoalsWidget: React.FC<GoalsWidgetProps> = ({ goals, loading = false
                 </div>
 
                 <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  <span>Tipificaciones hoy: {goal.current}</span>
+                  <span>
+                    {(() => {
+                      const pd = goal.periodDays ?? 1;
+                      const label =
+                        pd <= 1 ? 'Tipificaciones hoy' : `Tipificaciones (${pd} días)`;
+                      return `${label}: ${goal.current}`;
+                    })()}
+                  </span>
                   <span>Meta: {goal.target}</span>
                 </div>
+                {goal.typificationName ? (
+                  <div className="text-[9px] font-medium text-slate-400 normal-case tracking-normal -mt-0.5">
+                    Solo cuenta: <span className="text-slate-600">«{goal.typificationName}»</span>
+                  </div>
+                ) : null}
 
                 <div className="w-full bg-slate-100/80 rounded-full h-2.5 overflow-hidden shadow-inner">
                   <div

@@ -151,6 +151,106 @@ async function addChannelToCampaignBridge(channelId) {
     }
 }
 
+function parseBool(value) {
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'y';
+}
+
+function getPjsipEndpointName(channel) {
+    const channelName = String(channel?.name || '').trim();
+    const match = channelName.match(/^PJSIP\/(.+?)-[0-9a-f]+$/i);
+    return match ? match[1] : '';
+}
+
+function normalizeTransferDestinationType(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw.includes('camp') || raw === 'campaign' || raw === 'queue') return 'CAMPAIGN';
+    if (raw.includes('agent') || raw.includes('agente')) return 'AGENT';
+    return 'EXTERNAL';
+}
+
+async function applyCampaignQueueSettings(callState, campaignId) {
+    try {
+        const pg = require('../config/pgDatabase');
+        const { rows } = await pg.query(
+            `SELECT moh_class, moh_custom_file, campaign_name
+             FROM gescall_campaigns
+             WHERE campaign_id = $1
+             LIMIT 1`,
+            [campaignId]
+        );
+        if (rows.length > 0) {
+            callState.mohClass = (rows[0].moh_class || '').trim() || null;
+            callState.mohCustomFile = (rows[0].moh_custom_file || '').trim() || null;
+            callState.campaignName = (rows[0].campaign_name || campaignId).replace(/\s+/g, '_');
+        }
+    } catch (err) {
+        console.warn(`[ARI] No se pudieron cargar ajustes de cola para campaña ${campaignId}:`, err.message);
+    }
+}
+
+/**
+ * If AMD has marked the call as machine/notsure, avoid agent dispatch.
+ * NOTE: This depends on dialplan setting AMDSTATUS/AMDCAUSE on the caller channel.
+ */
+async function evaluateWaiterAmd(waiter) {
+    try {
+        const waiterChannelId = waiter?.channelId;
+        if (!waiterChannelId) return { action: 'PASS' };
+        const stateObj = activeCalls.get(waiterChannelId);
+        if (!stateObj) return { action: 'PASS' };
+        if (stateObj.campaignType !== 'OUTBOUND_PREDICTIVE') return { action: 'PASS' };
+
+        const amdEnabled = parseBool(stateObj.amdEnabled ?? stateObj.var_alt_phone_enabled);
+        if (!amdEnabled) return { action: 'PASS' };
+
+        let amdStatus = '';
+        let amdCause = '';
+        try {
+            const st = await ari.channels.getChannelVar({ channelId: waiterChannelId, variable: 'AMDSTATUS' });
+            const cs = await ari.channels.getChannelVar({ channelId: waiterChannelId, variable: 'AMDCAUSE' });
+            amdStatus = String(st?.value || '').trim().toUpperCase();
+            amdCause = String(cs?.value || '').trim();
+        } catch (_) {
+            const waitMs = Math.max(0, Date.now() - (waiter?.joinTime || Date.now()));
+            if (waitMs < 6500) {
+                return { action: 'WAIT' };
+            }
+            // If the dialplan did not set AMD variables, do not treat missing telemetry as voicemail.
+            console.log(`[Queue] AMD sin datos para canal ${waiterChannelId} tras ${waitMs}ms; se envia a agente.`);
+            return { action: 'PASS' };
+        }
+
+        console.log(`[Queue] AMD check canal ${waiterChannelId}: status="${amdStatus || 'EMPTY'}"${amdCause ? ` cause="${amdCause}"` : ''}`);
+        if (!['MACHINE', 'NOTSURE'].includes(amdStatus)) return { action: 'PASS' };
+
+        // Mark call outcome before hanging up so ChannelDestroyed writes AM.
+        try {
+            const keys = await redis.keys(`gescall:call:*:${waiterChannelId}`);
+            if (keys && keys.length > 0) {
+                await redis.hSet(keys[0], {
+                    ari_handled: 'YES',
+                    final_status: 'AM',
+                    status: 'AM',
+                    amd_status: amdStatus,
+                    amd_cause: amdCause,
+                });
+            }
+        } catch (_) { /* ignore redis write failures */ }
+
+        try {
+            await ari.channels.hangup({ channelId: waiterChannelId });
+        } catch (_) { /* already closed */ }
+
+        console.log(`[Queue] AMD bloqueo: canal ${waiterChannelId} marcado como ${amdStatus}${amdCause ? ` (${amdCause})` : ''}. No se envia a agente.`);
+        return { action: 'SKIP' };
+    } catch (err) {
+        console.error(`[Queue] evaluateWaiterAmd error (${waiter?.channelId || 'unknown'}):`, err.message);
+        return { action: 'PASS' };
+    }
+}
+
 async function dispatchQueues() {
     if (!ari) return;
     for (const [campaignId, waiters] of queueWaiters.entries()) {
@@ -206,6 +306,17 @@ async function dispatchQueues() {
                 }
             }
             if (!selectedAgent) continue;
+
+            const waiterPreview = waiters[0];
+            if (!waiterPreview) continue;
+            const amdDecision = await evaluateWaiterAmd(waiterPreview);
+            if (amdDecision.action === 'WAIT') {
+                continue;
+            }
+            if (amdDecision.action === 'SKIP') {
+                waiters.shift();
+                continue;
+            }
 
             // We have a waiter and an agent.
             // Change agent state to prevent multiple calls
@@ -370,6 +481,14 @@ async function handleGlobalChannelDestroyed(event, channel) {
                 }
             }
 
+            // Causa de colgado: el evento ARI ChannelDestroyed trae `cause`; getChannelVar(HANGUPCAUSE)
+            // en StasisEnd suele estar vacío. Sin esto la columna "Quién colgó" queda siempre null → "Desconocido".
+            const causeRaw = event && typeof event === 'object' ? event.cause : undefined;
+            const causeFromEv = causeRaw !== undefined && causeRaw !== null ? String(causeRaw) : null;
+            const fr = typeof callData.final_hangup_cause === 'string' ? callData.final_hangup_cause.trim() : '';
+            const causeFromRedis = fr !== '' ? fr : null;
+            const hangupCauseForLog = causeFromEv || causeFromRedis;
+
             // Parallel DB updates + Redis cleanup
             await Promise.all([
                 pg.query(`
@@ -389,7 +508,27 @@ async function handleGlobalChannelDestroyed(event, channel) {
                 redis.del(callKey)
             ]);
 
-            console.log(`[ARI-Global] ✓ lead=${callData.lead_id} ${finalStatus} ${duration}s dtmf=${dtmf} (from ChannelDestroyed)`);
+            if (hangupCauseForLog) {
+                try {
+                    await pg.query(`
+                        UPDATE gescall_call_log
+                        SET hangup_cause = CASE
+                            WHEN hangup_cause IS NULL OR TRIM(hangup_cause::text) = '' THEN $1::varchar(50)
+                            ELSE hangup_cause END
+                        WHERE log_id = (
+                            SELECT log_id FROM gescall_call_log
+                            WHERE lead_id = $2::bigint AND campaign_id = $3::bigint
+                              AND call_date >= NOW() - INTERVAL '45 minutes'
+                            ORDER BY log_id DESC
+                            LIMIT 1
+                        )
+                    `, [hangupCauseForLog, callData.lead_id, callData.campaign_id]);
+                } catch (hcErr) {
+                    console.warn(`[ARI-Global] hangup_cause patch skipped: ${hcErr.message}`);
+                }
+            }
+
+            console.log(`[ARI-Global] ✓ lead=${callData.lead_id} ${finalStatus} ${duration}s dtmf=${dtmf} hc=${hangupCauseForLog || '(none)'} (from ChannelDestroyed)`);
             if (metrics.recordDuration) metrics.recordDuration(duration);
             if (webhooks.callCompleted) webhooks.callCompleted(callData.campaign_id, callData.lead_id, callData.phone_number, finalStatus, duration, dtmf);
         }
@@ -560,6 +699,7 @@ async function handleStasisStart(event, channel) {
         let phoneNumber = '';
         let customVars = {};
         let inboundDestinationType = null;
+        let amdEnabled = false;
 
         try {
             const cTypeVar = await channel.getChannelVar({ variable: 'campaign_type' });
@@ -569,9 +709,10 @@ async function handleStasisStart(event, channel) {
         // --- ENTRANTE: gescall_route_rules ---
         if (appArgs.includes('inbound')) {
             const didNumber = appArgs[1] || channel.dialplan.exten || '';
-            console.log(`[ARI] Inbound call received, resolving DID: ${didNumber}`);
+            const trunkHint = appArgs[2] || getPjsipEndpointName(channel);
+            console.log(`[ARI] Inbound call received, resolving DID: ${didNumber}${trunkHint ? ` via trunk ${trunkHint}` : ''}`);
             try {
-                const routeRow = await resolveInboundDid(didNumber, null);
+                const routeRow = await resolveInboundDid(didNumber, trunkHint || null);
                 if (routeRow) {
                     campaignId = routeRow.destination_campaign_id;
                     campaignType = 'INBOUND';
@@ -627,6 +768,28 @@ async function handleStasisStart(event, channel) {
             }
         }
 
+        // Entrante sin lead (IVR → cola): el número del llamante no viene de PostgreSQL; tomarlo del canal ARI
+        if (appArgs.includes('inbound') && !String(phoneNumber || '').trim()) {
+            const fromNum = String(channel.caller?.number || '').trim();
+            const fromName = String(channel.caller?.name || '').trim();
+            if (fromNum) {
+                phoneNumber = fromNum.replace(/^\+/, '');
+            } else if (fromName && !/^V\d/.test(fromName)) {
+                phoneNumber = fromName.replace(/^\+/, '');
+            }
+            if (!String(phoneNumber || '').trim()) {
+                try {
+                    const cidNum = await channel.getChannelVar({ variable: 'CALLERID(num)' });
+                    if (cidNum?.value) {
+                        phoneNumber = String(cidNum.value).trim().replace(/^\+/, '');
+                    }
+                } catch (_) { /* variable no disponible */ }
+            }
+            if (phoneNumber) {
+                console.log(`[ARI] Inbound ANI: ${phoneNumber}`);
+            }
+        }
+
         console.log(`[ARI] Campaign: ${campaignId}, Transfer: ${transferNumber}, Custom Vars: ${Object.keys(customVars).length}`);
 
         // Load MOH and Recording settings for campaign
@@ -637,12 +800,16 @@ async function handleStasisStart(event, channel) {
         if (campaignId) {
             try {
                 const mohRows = await pg.query(
-                    `SELECT moh_class, moh_custom_file, recording_settings, campaign_name FROM gescall_campaigns WHERE campaign_id = $1 LIMIT 1`,
+                    `SELECT moh_class, moh_custom_file, recording_settings, campaign_name, alt_phone_enabled
+                     FROM gescall_campaigns
+                     WHERE campaign_id = $1
+                     LIMIT 1`,
                     [campaignId]
                 );
                 if (mohRows.rows.length > 0) {
                     mohClass = (mohRows.rows[0].moh_class || '').trim() || null;
                     mohCustomFile = (mohRows.rows[0].moh_custom_file || '').trim() || null;
+                    amdEnabled = !!mohRows.rows[0].alt_phone_enabled;
                     
                     // Resolve recording filename pattern
                     const recSettings = mohRows.rows[0].recording_settings || {};
@@ -728,6 +895,7 @@ async function handleStasisStart(event, channel) {
             campaignName, // Campaign name for folder structure
             mohClass,
             mohCustomFile,
+            amdEnabled,
             campaignType,
             inboundQueueAfterIvr,
             queued: false,
@@ -788,7 +956,7 @@ async function handleStasisStart(event, channel) {
         // Ensure log is written even if promise chain is broken by early hangup
         const callState = activeCalls.get(channelId);
         if (callState) {
-            logCallResult(callState);
+            await logCallResult(callState);
             activeCalls.delete(channelId);
         }
     }
@@ -822,8 +990,9 @@ async function handleStasisEnd(event, channel) {
             console.log(`[ARI] Call ${channelId} marked as PDROP — predictive drop (channel hung up before agent dispatch)`);
         }
 
-        // Log to gescall_call_log
-        logCallResult(callState);
+        // Log to gescall_call_log (await para no competir con ChannelDestroyed:
+        // si logToGescall corre después del parche por event.cause, borraba hangup_cause).
+        await logCallResult(callState);
 
         // Emit live event
         if (io) {
@@ -1023,6 +1192,14 @@ async function executeFlow(channelId, flow) {
                     break;
                 case 'transfer':
                     result = await nodeTransfer(channelId, node.data, callState);
+                    if (result && result.handle === 'missing_transfer_number' && callState.inboundQueueAfterIvr && !callState.hungUp) {
+                        console.log('[ARI] Transfer sin numero; enlazando a cola de campaña');
+                        await addChannelToCampaignBridge(channelId);
+                        logEntry.endTime = Date.now();
+                        logEntry.durationMs = logEntry.endTime - nodeStartTime;
+                        logEntry.result = { handle: 'queue_fallback' };
+                        return;
+                    }
                     logEntry.endTime = Date.now();
                     logEntry.durationMs = logEntry.endTime - nodeStartTime;
                     logEntry.result = { handle: 'transfer' };
@@ -1213,19 +1390,88 @@ async function nodeTransfer(channelId, data, callState) {
     if (!callState) return;
 
     const number = data.number || callState.transferNumber || '';
+    const inferredDestinationType = data.destinationType || (data.targetCampaignId || (!number && !data.agentUsername && !data.agentExtension) ? 'Campaña' : data.agentUsername || data.agentExtension ? 'Agente' : 'Número externo');
+    const destinationType = normalizeTransferDestinationType(inferredDestinationType);
     const trunk = data.trunk || 'PJSIP/chock';
     const prefix = data.prefix || '';
     const overflowNumber = data.overflowNumber || '';
     const timeout = (data.timeout || 45) * 1000;
 
-    if (!number) {
-        console.error(`[ARI] Transfer: no number configured`);
-        return;
-    }
-
-    // Play transfer message if configured
     if (data.message) {
         await nodePlayTTS(channelId, { text: data.message });
+    }
+
+    if (destinationType === 'CAMPAIGN') {
+        const targetCampaignId = String(data.targetCampaignId || data.campaignId || callState.campaignId || '').trim();
+        if (!targetCampaignId) {
+            console.error(`[ARI] Transfer: no campaign configured`);
+            return { handle: 'missing_transfer_campaign' };
+        }
+
+        callState.campaignId = targetCampaignId;
+        callState.campaignType = 'INBOUND';
+        callState.inboundQueueAfterIvr = false;
+        await applyCampaignQueueSettings(callState, targetCampaignId);
+        console.log(`[ARI] Transfer to campaign queue ${targetCampaignId}`);
+        await addChannelToCampaignBridge(channelId);
+        return { handle: 'campaign_transfer', campaignId: targetCampaignId };
+    }
+
+    if (destinationType === 'AGENT') {
+        const pg = require('../config/pgDatabase');
+        const agentUsername = String(data.agentUsername || '').trim();
+        let agentExtension = String(data.agentExtension || '').trim();
+
+        if (agentUsername && !agentExtension) {
+            try {
+                const { rows } = await pg.query(
+                    `SELECT sip_extension FROM gescall_users WHERE username = $1 AND active = true LIMIT 1`,
+                    [agentUsername]
+                );
+                agentExtension = String(rows[0]?.sip_extension || '').trim();
+            } catch (err) {
+                console.error(`[ARI] Transfer agent lookup failed for ${agentUsername}:`, err.message);
+            }
+        }
+
+        if (!agentExtension) {
+            console.error(`[ARI] Transfer: no agent extension configured`);
+            return { handle: 'missing_transfer_agent' };
+        }
+
+        const redisKey = agentUsername ? `gescall:agent:${agentUsername}` : '';
+        if (redisKey) {
+            const stateMap = await redis.hGetAll(redisKey).catch(() => ({}));
+            if (stateMap.state && stateMap.state !== 'READY') {
+                console.log(`[ARI] Transfer agent ${agentUsername} is ${stateMap.state}; originating anyway`);
+            }
+            await redis.hSet(redisKey, 'state', 'RINGING').catch(() => {});
+        }
+
+        const cId = callState.phone || callState.leadId || 'Desconocido';
+        console.log(`[ARI] Transfer to agent ${agentUsername || agentExtension} (Ext: ${agentExtension})`);
+        ari.channels.originate({
+            endpoint: `PJSIP/${agentExtension}`,
+            app: 'gescall-ivr',
+            appArgs: 'dialed_agent',
+            callerId: `"${cId}" <${cId}>`,
+            variables: {
+                'waiter_channel': channelId,
+                'campaign_id': callState.campaignId || '',
+                'agent_username': agentUsername || agentExtension
+            }
+        }).catch(async err => {
+            console.error(`[ARI] Transfer to agent failed ${agentUsername || agentExtension}:`, err.message);
+            if (redisKey) await redis.hSet(redisKey, 'state', 'READY').catch(() => {});
+            try { await callState.channel.hangup(); } catch (e) { /* already gone */ }
+        });
+
+        return { handle: 'agent_transfer', agent: agentUsername || agentExtension };
+    }
+
+    if (!number) {
+        console.error(`[ARI] Transfer: no number configured`);
+        return { handle: 'missing_transfer_number' };
     }
 
     // Build dial string — use PJSIP SIP URI for SBC trunks
@@ -1995,7 +2241,11 @@ async function logCallResult(callState) {
                     final_status: status,
                     final_dtmf: callState.dtmfBuffer || '0',
                     final_duration: String(duration),
-                    ari_handled: 'YES'
+                    ari_handled: 'YES',
+                    // Fallback por si HANGUPCAUSE no llega en ChannelDestroyed antes que StasisEnd
+                    ...(callState.hangupCause != null && String(callState.hangupCause).trim() !== ''
+                        ? { final_hangup_cause: String(callState.hangupCause).trim() }
+                        : {}),
                 });
             } catch (e) {
                 console.error(`[ARI] Failed to write outcome to Redis:`, e.message);
@@ -2072,7 +2322,7 @@ async function logToGescall(callState, status, dtmf, duration) {
         const channelId = callState.channel?.id || '';
         const pgUpdateResult = await pg.query(
             `UPDATE gescall_call_log 
-             SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7), hangup_cause = $8
+             SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7), hangup_cause = COALESCE($8, hangup_cause)
              WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
              RETURNING log_id`,
             [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId, callState.hangupCause || null]

@@ -87,6 +87,8 @@ interface Campaign {
   autoDialLevel?: string;
   maxRetries?: number;
   workspaceDailyTarget?: number;
+  workspaceGoalPeriodDays?: number;
+  workspaceGoalTypificationId?: number | null;
   campaign_type?: string;
   predictive_target_drop_rate?: number;
   predictive_min_factor?: number;
@@ -125,6 +127,11 @@ export function CampaignDetailsModal({
   const [dialLevel, setDialLevel] = useState(campaign.autoDialLevel || "1.0");
   const [maxRetries, setMaxRetries] = useState<number>(campaign.maxRetries ?? 3);
   const [workspaceDailyTarget, setWorkspaceDailyTarget] = useState<number>(campaign.workspaceDailyTarget ?? 20);
+  const [workspaceGoalPeriodDays, setWorkspaceGoalPeriodDays] = useState<number>(campaign.workspaceGoalPeriodDays ?? 1);
+  const [workspaceGoalTypificationId, setWorkspaceGoalTypificationId] = useState<number | null>(
+    campaign.workspaceGoalTypificationId ?? null
+  );
+  const [goalTypifications, setGoalTypifications] = useState<{ id: number; name: string }[]>([]);
   const [savingGeneral, setSavingGeneral] = useState(false);
   // Predictive state
   const [predTargetDropRate, setPredTargetDropRate] = useState(campaign.predictive_target_drop_rate ?? 0.03);
@@ -137,10 +144,29 @@ export function CampaignDetailsModal({
     setDialLevel(campaign.autoDialLevel || "1.0");
     setMaxRetries(campaign.maxRetries ?? 3);
     setWorkspaceDailyTarget(campaign.workspaceDailyTarget ?? 20);
+    setWorkspaceGoalPeriodDays(campaign.workspaceGoalPeriodDays ?? 1);
+    setWorkspaceGoalTypificationId(campaign.workspaceGoalTypificationId ?? null);
     if (campaign.predictive_target_drop_rate !== undefined) setPredTargetDropRate(campaign.predictive_target_drop_rate);
     if (campaign.predictive_min_factor !== undefined) setPredMinFactor(campaign.predictive_min_factor);
     if (campaign.predictive_max_factor !== undefined) setPredMaxFactor(campaign.predictive_max_factor);
-  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.workspaceDailyTarget, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, isOpen]);
+  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.workspaceDailyTarget, campaign.workspaceGoalPeriodDays, campaign.workspaceGoalTypificationId, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !campaign.id) return;
+    let cancelled = false;
+    api.getTypifications(campaign.id)
+      .then((res: any) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        setGoalTypifications(
+          rows.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name || `Tipificación #${t.id}` }))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setGoalTypifications([]);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen, campaign.id]);
 
   const handleSaveGeneralSettings = async () => {
     setSavingGeneral(true);
@@ -148,7 +174,11 @@ export function CampaignDetailsModal({
       await Promise.all([
         api.updateCampaignDialLevel(campaign.id, dialLevel),
         api.updateCampaignRetries(campaign.id, maxRetries),
-        api.updateCampaignWorkspaceDailyTarget(campaign.id, workspaceDailyTarget),
+        api.updateCampaignWorkspaceGoal(campaign.id, {
+          workspace_daily_target: Math.max(1, Math.min(100000, Math.floor(workspaceDailyTarget) || 20)),
+          workspace_goal_period_days: Math.max(1, Math.min(366, Math.floor(workspaceGoalPeriodDays) || 1)),
+          workspace_goal_typification_id: workspaceGoalTypificationId,
+        }),
         ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
           api.updateCampaignPredictive(campaign.id, {
             predictive_target_drop_rate: predTargetDropRate,
@@ -371,7 +401,12 @@ export function CampaignDetailsModal({
 
   // Function to fetch leads for a specific list
   const fetchListLeads = async (list: any, offset = 0) => {
-    console.log("[CampaignDetailsModal] fetchListLeads called with list:", list);
+    if (import.meta.env.DEV) {
+      console.log('[CampaignDetailsModal] fetchListLeads', {
+        list_id: list?.list_id,
+        list_name: list?.list_name,
+      });
+    }
     setSelectedList(list);
     setLoadingLeads(true);
     setLeadsOffset(offset);
@@ -1329,23 +1364,57 @@ export function CampaignDetailsModal({
 
                       <div className="border-t border-slate-100" />
 
-                      <div className="flex items-center justify-between">
+                      <div className="space-y-3">
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500" />
-                          <span className="text-xs font-semibold text-slate-700">Meta diaria workspace</span>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />
+                          <span className="text-xs font-semibold text-slate-700">Meta en workspace del agente</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor="workspaceDailyTargetModal" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Objetivo</Label>
-                          <Input
-                            id="workspaceDailyTargetModal"
-                            type="number"
-                            min="1"
-                            max="100000"
-                            value={workspaceDailyTarget}
-                            onChange={(e) => setWorkspaceDailyTarget(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                            placeholder="20"
-                            className="font-mono text-xs w-20 h-7 text-center"
-                          />
+                        <div className="grid grid-cols-2 gap-3 pl-5">
+                          <div className="space-y-1">
+                            <Label htmlFor="workspaceDailyTargetModal" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Objetivo</Label>
+                            <Input
+                              id="workspaceDailyTargetModal"
+                              type="number"
+                              min="1"
+                              max="100000"
+                              value={workspaceDailyTarget}
+                              onChange={(e) => setWorkspaceDailyTarget(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                              placeholder="20"
+                              className="font-mono text-xs h-7 text-center"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor="workspaceGoalPeriodModal" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Días (1–366)</Label>
+                            <Input
+                              id="workspaceGoalPeriodModal"
+                              type="number"
+                              min="1"
+                              max="366"
+                              value={workspaceGoalPeriodDays}
+                              onChange={(e) => setWorkspaceGoalPeriodDays(Math.max(1, Math.min(366, parseInt(e.target.value, 10) || 1)))}
+                              className="font-mono text-xs h-7 text-center"
+                            />
+                          </div>
+                        </div>
+                        <div className="pl-5 space-y-1">
+                          <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Tipificación que suma</Label>
+                          <Select
+                            value={workspaceGoalTypificationId == null ? "__all__" : String(workspaceGoalTypificationId)}
+                            onValueChange={(v) => {
+                              if (v === "__all__") setWorkspaceGoalTypificationId(null);
+                              else setWorkspaceGoalTypificationId(parseInt(v, 10));
+                            }}
+                          >
+                            <SelectTrigger className="h-7 text-xs">
+                              <SelectValue placeholder="Todas" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__all__">Todas las tipificaciones</SelectItem>
+                              {goalTypifications.map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                       </div>
 
@@ -1375,7 +1444,9 @@ export function CampaignDetailsModal({
                           disabled={savingGeneral || (
                             dialLevel === campaign.autoDialLevel &&
                             maxRetries === (campaign.maxRetries ?? 3) &&
-                            workspaceDailyTarget === (campaign.workspaceDailyTarget ?? 20)
+                            workspaceDailyTarget === (campaign.workspaceDailyTarget ?? 20) &&
+                            workspaceGoalPeriodDays === (campaign.workspaceGoalPeriodDays ?? 1) &&
+                            (workspaceGoalTypificationId ?? null) === (campaign.workspaceGoalTypificationId ?? null)
                           )}
                           className="gap-1.5 h-8 rounded-lg shadow-sm text-xs"
                         >

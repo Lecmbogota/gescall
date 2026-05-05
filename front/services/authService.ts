@@ -1,4 +1,5 @@
 import type { AuthSession } from '../stores/authStore';
+import { sanitizeLoginApiResponseForLog } from '../utils/sanitizeAuthForLog';
 
 class AuthService {
   private baseUrl: string;
@@ -146,7 +147,7 @@ class AuthService {
       }
 
       console.log('[AuthService] Login successful');
-      console.log('[AuthService] User info:', data);
+      console.log('[AuthService] User info:', sanitizeLoginApiResponseForLog(data));
 
       // Return session data with all fields from backend
       const session: AuthSession = {

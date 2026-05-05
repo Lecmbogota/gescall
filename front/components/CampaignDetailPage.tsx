@@ -304,6 +304,12 @@ interface Campaign {
         night_end?: number;
     };
     pauseSettings?: PauseSettingsState;
+    /** Meta diaria de tipificaciones en el widget «Metas de Campañas» del workspace del agente */
+    workspaceDailyTarget?: number;
+    /** Días hacia atrás desde hoy inclusivo (1 = solo hoy) */
+    workspaceGoalPeriodDays?: number;
+    /** Si está definido, solo esta tipificación suma al progreso; null = todas */
+    workspaceGoalTypificationId?: number | null;
     recording_settings?: {
         enabled?: boolean;
         storage?: string;
@@ -399,7 +405,7 @@ interface CampaignDetailPageProps {
     onBack: () => void;
     username: string;
     userLevel: number;
-    onUpdateCampaign?: () => void;
+    onUpdateCampaign?: (patch?: Partial<Pick<Campaign, 'workspaceDailyTarget' | 'workspaceGoalPeriodDays' | 'workspaceGoalTypificationId'>>) => void;
 }
 
 interface DialLogRecord {
@@ -491,6 +497,11 @@ export function CampaignDetailPage({
     // Selector de plantilla de horario reutilizable (sustituye al editor inline).
     const [scheduleTemplates, setScheduleTemplates] = useState<{ id: number; name: string; enabled: boolean; timezone: string; windows: { days: number[]; start: string; end: string }[] }[]>([]);
     const [scheduleTemplateId, setScheduleTemplateId] = useState<number | null>(campaign.scheduleTemplateId ?? null);
+    const [workspaceDailyTarget, setWorkspaceDailyTarget] = useState<number>(campaign.workspaceDailyTarget ?? 20);
+    const [workspaceGoalPeriodDays, setWorkspaceGoalPeriodDays] = useState<number>(campaign.workspaceGoalPeriodDays ?? 1);
+    const [workspaceGoalTypificationId, setWorkspaceGoalTypificationId] = useState<number | null>(
+        campaign.workspaceGoalTypificationId ?? null
+    );
     const [teleprompterTemplate, setTeleprompterTemplate] = useState<string>(campaign.teleprompterTemplate || "");
     const [teleprompterDayparts, setTeleprompterDayparts] = useState(normalizeTeleprompterDayparts(campaign.teleprompterDayparts));
     const [pauseSettings, setPauseSettings] = useState<PauseSettingsState>(normalizePauseSettings(campaign.pauseSettings));
@@ -697,7 +708,10 @@ export function CampaignDetailPage({
         setTeleprompterTemplate(campaign.teleprompterTemplate || "");
         setTeleprompterDayparts(normalizeTeleprompterDayparts(campaign.teleprompterDayparts));
         setPauseSettings(normalizePauseSettings(campaign.pauseSettings));
-    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule, campaign.scheduleTemplateId, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings]);
+        setWorkspaceDailyTarget(campaign.workspaceDailyTarget ?? 20);
+        setWorkspaceGoalPeriodDays(campaign.workspaceGoalPeriodDays ?? 1);
+        setWorkspaceGoalTypificationId(campaign.workspaceGoalTypificationId ?? null);
+    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule, campaign.scheduleTemplateId, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings, campaign.workspaceDailyTarget, campaign.workspaceGoalPeriodDays, campaign.workspaceGoalTypificationId]);
 
     // Carga las plantillas de horario disponibles (una sola vez por sesión de detalle).
     useEffect(() => {
@@ -734,6 +748,11 @@ export function CampaignDetailPage({
     }, [campaign.id]);
 
     const hasConfigChanges = useMemo(() => {
+        if (workspaceDailyTarget !== (campaign.workspaceDailyTarget ?? 20)) return true;
+        if (workspaceGoalPeriodDays !== (campaign.workspaceGoalPeriodDays ?? 1)) return true;
+        const origTip = campaign.workspaceGoalTypificationId ?? null;
+        const curTip = workspaceGoalTypificationId ?? null;
+        if (origTip !== curTip) return true;
         if (dialLevel.toString() !== (campaign.autoDialLevel?.toString() || "1.0")) return true;
         if (maxRetries !== (campaign.maxRetries ?? 3)) return true;
         if (altPhoneEnabled !== (campaign.altPhoneEnabled || false)) return true;
@@ -774,7 +793,7 @@ export function CampaignDetailPage({
         }
         
         return false;
-    }, [dialLevel, maxRetries, altPhoneEnabled, retryGroups, predTargetDropRate, predMinFactor, predMaxFactor, teleprompterTemplate, teleprompterDayparts, pauseSettings, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.retrySettings, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings]);
+    }, [workspaceDailyTarget, workspaceGoalPeriodDays, workspaceGoalTypificationId, dialLevel, maxRetries, altPhoneEnabled, retryGroups, predTargetDropRate, predMinFactor, predMaxFactor, teleprompterTemplate, teleprompterDayparts, pauseSettings, campaign.workspaceDailyTarget, campaign.workspaceGoalPeriodDays, campaign.workspaceGoalTypificationId, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.retrySettings, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings]);
 
     const scheduleTemplateDirty = useMemo(() => {
         return (scheduleTemplateId ?? null) !== (campaign.scheduleTemplateId ?? null);
@@ -806,10 +825,19 @@ export function CampaignDetailPage({
                 'FAILED': getVal(retryGroups.FalloTecnico)
             };
 
+            const workspaceTargetSaved = Math.max(1, Math.min(100_000, Math.floor(Number(workspaceDailyTarget)) || 20));
+            const periodSaved = Math.max(1, Math.min(366, Math.floor(Number(workspaceGoalPeriodDays)) || 1));
+            const tipSaved = workspaceGoalTypificationId;
+
             await Promise.all([
                 api.updateCampaignDialLevel(campaign.id, dialLevel),
                 api.updateCampaignRetries(campaign.id, maxRetries),
                 api.updateCampaignRetrySettings(campaign.id, expandedRetrySettings),
+                api.updateCampaignWorkspaceGoal(campaign.id, {
+                    workspace_daily_target: workspaceTargetSaved,
+                    workspace_goal_period_days: periodSaved,
+                    workspace_goal_typification_id: tipSaved,
+                }),
                 ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
                 api.updateCampaignPredictive(campaign.id, {
                     predictive_target_drop_rate: predTargetDropRate,
@@ -827,7 +855,16 @@ export function CampaignDetailPage({
                 ] : []),
             ]);
             toast.success("Configuración general guardada correctamente");
-            if (onUpdateCampaign) onUpdateCampaign();
+            setWorkspaceDailyTarget(workspaceTargetSaved);
+            setWorkspaceGoalPeriodDays(periodSaved);
+            setWorkspaceGoalTypificationId(tipSaved);
+            if (onUpdateCampaign) {
+                onUpdateCampaign({
+                    workspaceDailyTarget: workspaceTargetSaved,
+                    workspaceGoalPeriodDays: periodSaved,
+                    workspaceGoalTypificationId: tipSaved,
+                });
+            }
             try {
                 const res: any = await api.getEffectiveOutboundTrunk(campaign.id);
                 const d = res?.data;
@@ -2659,6 +2696,12 @@ export function CampaignDetailPage({
                     <CampaignSettingsTab
                         campaign={campaign}
                         outboundTrunkSummary={outboundTrunkSummary}
+                        workspaceDailyTarget={workspaceDailyTarget}
+                        setWorkspaceDailyTarget={setWorkspaceDailyTarget}
+                        workspaceGoalPeriodDays={workspaceGoalPeriodDays}
+                        setWorkspaceGoalPeriodDays={setWorkspaceGoalPeriodDays}
+                        workspaceGoalTypificationId={workspaceGoalTypificationId}
+                        setWorkspaceGoalTypificationId={setWorkspaceGoalTypificationId}
                         dialLevel={dialLevel}
                         setDialLevel={setDialLevel}
                         cpsAvailability={cpsAvailability}

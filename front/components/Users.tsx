@@ -55,6 +55,7 @@ import { useAuthStore, Campaign } from "../stores/authStore";
 interface User {
     user_id: string;
     username: string;
+    full_name?: string | null;
     role_id: number;
     role: string;
     active: boolean;
@@ -115,6 +116,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
 
     const [formData, setFormData] = useState({
         username: "",
+        full_name: "",
         password: "",
         role_id: "",
         active: true,
@@ -214,6 +216,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
         setSelectedUser(null);
         setFormData({
             username: "",
+            full_name: "",
             password: "",
             role_id: roles.length > 0 ? roles[0].id.toString() : "",
             active: true,
@@ -226,6 +229,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
         setSelectedUser(user);
         setFormData({
             username: user.username,
+            full_name: user.full_name || "",
             password: "", // Don't normally send passwords back; empty means keep current if editing
             role_id: user.role_id.toString(),
             active: user.active,
@@ -378,9 +382,10 @@ export function Users({ username: loggedInUsername }: UsersProps) {
         }
     };
 
-    const filteredUsers = users.filter(user =>
-        user.username.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredUsers = users.filter(user => {
+        const term = searchTerm.toLowerCase();
+        return user.username.toLowerCase().includes(term) || (user.full_name || "").toLowerCase().includes(term);
+    });
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -423,7 +428,7 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                     <div className="relative w-72">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                         <Input
-                            placeholder="Buscar por usuario..."
+                            placeholder="Buscar por usuario o nombre..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             className="pl-9 bg-white border-slate-200 shadow-sm"
@@ -471,7 +476,8 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                                     <TableRow key={user.user_id} className="border-slate-100 hover:bg-slate-50/50 transition-colors">
                                         <TableCell className="font-mono text-slate-500 text-xs">{user.user_id}</TableCell>
                                         <TableCell>
-                                            <div className="font-medium text-slate-900">{user.username}</div>
+                                            <div className="font-medium text-slate-900">{user.full_name || user.username}</div>
+                                            <div className="text-xs text-slate-500">@{user.username}</div>
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center gap-1.5">
@@ -622,6 +628,16 @@ export function Users({ username: loggedInUsername }: UsersProps) {
                                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                                 placeholder="ej. jdoe"
                                 required
+                            />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="full_name">Nombre y Apellido</Label>
+                            <Input
+                                id="full_name"
+                                value={formData.full_name}
+                                onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                                placeholder="ej. Luis Caraballo"
                             />
                         </div>
 

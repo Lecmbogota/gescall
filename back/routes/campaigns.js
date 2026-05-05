@@ -70,6 +70,7 @@ const DEFAULT_DISPOSITIONS = [
 ];
 
 const CAMPAIGN_TYPES_WITH_PAUSES = new Set(['INBOUND', 'OUTBOUND_PROGRESSIVE', 'OUTBOUND_PREDICTIVE']);
+const AGENT_DIALED_CAMPAIGN_TYPES = new Set(['OUTBOUND_PROGRESSIVE', 'OUTBOUND_PREDICTIVE']);
 const DEFAULT_TELEPROMPTER_DAYPARTS = {
     day: 'día',
     afternoon: 'tarde',
@@ -271,10 +272,24 @@ router.get('/cps-availability', async (req, res) => {
 
 router.post('/:campaign_id/start', async (req, res) => {
     try {
-        const campCheck = await pg.query('SELECT auto_dial_level, active FROM gescall_campaigns WHERE campaign_id = $1', [req.params.campaign_id]);
+        const campCheck = await pg.query('SELECT auto_dial_level, active, campaign_type FROM gescall_campaigns WHERE campaign_id = $1', [req.params.campaign_id]);
         if (campCheck.rows.length === 0) return res.status(404).json({ success: false, error: 'Campaign not found' });
         
         if (!campCheck.rows[0].active) {
+            if (AGENT_DIALED_CAMPAIGN_TYPES.has(campCheck.rows[0].campaign_type)) {
+                const assignedAgents = await pg.query(
+                    'SELECT COUNT(*)::int AS total FROM gescall_user_campaigns WHERE campaign_id = $1',
+                    [req.params.campaign_id]
+                );
+                const agentCount = assignedAgents.rows[0]?.total || 0;
+                if (agentCount === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'No se puede iniciar. Las campañas progresivas o predictivas requieren al menos un agente asignado.'
+                    });
+                }
+            }
+
             const level = parseFloat(campCheck.rows[0].auto_dial_level) || 1.0;
             const trunkQuery = await pg.query('SELECT SUM(max_cps) as total_cps FROM gescall_trunks WHERE active = true');
             const usedQuery = await pg.query("SELECT SUM(auto_dial_level) as used_cps FROM gescall_campaigns WHERE active = true AND dial_method = 'RATIO'");
@@ -722,25 +737,85 @@ router.put('/:campaign_id/workspace-daily-target', async (req, res) => {
             });
         }
 
-        console.log(`[pg_campaigns] Updating campaign ${campaign_id} workspace_daily_target to: ${workspaceDailyTarget}`);
-        const updateRes = await pg.query(
-            'UPDATE gescall_campaigns SET workspace_daily_target = $1 WHERE campaign_id = $2 RETURNING campaign_id, workspace_daily_target',
-            [workspaceDailyTarget, campaign_id]
-        );
+        const rawPeriod = req.body?.workspace_goal_period_days;
+        const hasPeriodKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'workspace_goal_period_days');
+        let workspaceGoalPeriodDays = null;
+        if (hasPeriodKey) {
+            workspaceGoalPeriodDays = parseInt(rawPeriod, 10);
+            if (!Number.isInteger(workspaceGoalPeriodDays) || workspaceGoalPeriodDays < 1 || workspaceGoalPeriodDays > 366) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'workspace_goal_period_days debe ser un entero entre 1 y 366',
+                });
+            }
+        }
+
+        const rawTipId = req.body?.workspace_goal_typification_id;
+        const hasTipKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'workspace_goal_typification_id');
+        let workspaceGoalTypificationId = null;
+        let tipExplicitNull = false;
+        if (hasTipKey) {
+            if (rawTipId === null || rawTipId === '') {
+                workspaceGoalTypificationId = null;
+                tipExplicitNull = true;
+            } else {
+                const tid = parseInt(rawTipId, 10);
+                if (!Number.isInteger(tid) || tid < 1) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'workspace_goal_typification_id inválido',
+                    });
+                }
+                const { rows: tipRows } = await pg.query(
+                    'SELECT id FROM gescall_typifications WHERE id = $1 AND campaign_id = $2 LIMIT 1',
+                    [tid, campaign_id]
+                );
+                if (!tipRows.length) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'La tipificación no pertenece a esta campaña',
+                    });
+                }
+                workspaceGoalTypificationId = tid;
+            }
+        }
+
+        const setParts = ['workspace_daily_target = $1'];
+        const params = [workspaceDailyTarget];
+        let i = 2;
+
+        if (workspaceGoalPeriodDays !== null) {
+            setParts.push(`workspace_goal_period_days = $${i++}`);
+            params.push(workspaceGoalPeriodDays);
+        }
+        if (hasTipKey) {
+            setParts.push(`workspace_goal_typification_id = $${i++}`);
+            params.push(tipExplicitNull ? null : workspaceGoalTypificationId);
+        }
+
+        params.push(campaign_id);
+        const updateSql = `UPDATE gescall_campaigns SET ${setParts.join(', ')} WHERE campaign_id = $${i}
+            RETURNING campaign_id, workspace_daily_target, workspace_goal_period_days, workspace_goal_typification_id`;
+
+        console.log(`[pg_campaigns] Updating campaign ${campaign_id} workspace goal: target=${workspaceDailyTarget} period=${hasPeriodKey ? workspaceGoalPeriodDays : 'unchanged'} tip=${hasTipKey ? (tipExplicitNull ? 'all' : workspaceGoalTypificationId) : 'unchanged'}`);
+        const updateRes = await pg.query(updateSql, params);
 
         if (!updateRes.rows.length) {
             return res.status(404).json({ success: false, error: 'Campaign not found' });
         }
 
+        const row = updateRes.rows[0];
         res.json({
             success: true,
-            message: `Meta diaria del workspace actualizada a ${workspaceDailyTarget}`,
-            data: updateRes.rows[0],
+            message: `Meta del workspace actualizada`,
+            data: row,
         });
         emitWorkspaceRefresh(req, {
             type: 'goal_target_updated',
             campaign_id,
-            workspace_daily_target: workspaceDailyTarget,
+            workspace_daily_target: row.workspace_daily_target,
+            workspace_goal_period_days: row.workspace_goal_period_days,
+            workspace_goal_typification_id: row.workspace_goal_typification_id,
         });
     } catch (error) {
         console.error('[pg_campaigns] Workspace Daily Target Update Error:', error);

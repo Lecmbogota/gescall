@@ -166,8 +166,9 @@ export function QuickLinksWidget({ id = "quick-links" }: QuickLinksWidgetProps) 
     if (link.url.startsWith("http")) {
       window.open(link.url, "_blank", "noopener,noreferrer");
     } else {
-      // Internal navigation
-      console.log("Navigate to:", link.url);
+      if (import.meta.env.DEV) {
+        console.log('Navigate to (dev):', link.url);
+      }
     }
   };
 

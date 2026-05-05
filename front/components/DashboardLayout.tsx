@@ -44,7 +44,7 @@ import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { BackgroundSocketManager } from "./BackgroundSocketManager";
 import { GlobalSupervisorChatWidget } from "./GlobalSupervisorChatWidget";
 import { toast } from "sonner";
-import logoURLPro from "./figma/logoURLPro.png";
+import logoChock from "../logo chock.png";
 import { useAuthStore } from "@/stores/authStore";
 
 interface DashboardLayoutProps {
@@ -385,13 +385,13 @@ export function DashboardLayout({
         )}
       >
         <div className={cn(
-          "overflow-hidden rounded-lg transition-all duration-300",
-          isSidebarOpen ? "w-40 h-16" : "w-14 h-14",
+          "flex items-center justify-center overflow-hidden rounded-xl transition-all duration-300",
+          isSidebarOpen ? "w-44 h-16" : "w-14 h-14 p-1",
         )}>
           <ImageWithFallback
-            src={logoURLPro}
-            alt="URL Pro Logo"
-            className="w-full h-full object-contain"
+            src={logoChock}
+            alt="Chock Telecom Logo"
+            className="w-full h-full object-contain brightness-0"
           />
         </div>
 

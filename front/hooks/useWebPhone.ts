@@ -4,19 +4,26 @@ import { UA, WebSocketInterface } from 'jssip';
 export function useWebPhone(extension?: string, password?: string, wsUrl?: string) {
   const [ua, setUa] = useState<UA | null>(null);
   const [session, setSession] = useState<any | null>(null);
-  const [status, setStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'registered' | 'calling' | 'incall'>('disconnected');
+  const [status, setStatus] = useState<
+    'disconnected' | 'connecting' | 'connected' | 'register_failed' | 'registered' | 'calling' | 'incall'
+  >('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [callerId, setCallerId] = useState<string>('');
   const audioRef = useRef<HTMLAudioElement>(new Audio());
 
   useEffect(() => {
-    if (!extension || !password || !wsUrl) return;
+    const ext = extension != null ? String(extension).trim() : '';
+    const pass = password != null ? String(password).trim() : '';
+    if (!ext || !pass || !wsUrl) return;
+
+    setError(null);
 
     const socket = new WebSocketInterface(wsUrl);
     const configuration = {
       sockets: [socket],
-      uri: `sip:${extension}@${wsUrl.split('/')[2].split(':')[0]}`,
-      password: password,
+      uri: `sip:${ext}@${wsUrl.split('/')[2].split(':')[0]}`,
+      password: pass,
+      authorization_user: ext,
       register: true
     };
 
@@ -25,10 +32,14 @@ export function useWebPhone(extension?: string, password?: string, wsUrl?: strin
     newUa.on('connecting', () => setStatus('connecting'));
     newUa.on('connected', () => setStatus('connected'));
     newUa.on('disconnected', () => setStatus('disconnected'));
-    newUa.on('registered', () => setStatus('registered'));
+    newUa.on('registered', () => {
+      setError(null);
+      setStatus('registered');
+    });
     newUa.on('registrationFailed', (e) => {
-      console.error('Registration failed', e);
+      console.error('Registration failed:', e?.cause || 'unknown');
       setError('Error de registro SIP');
+      setStatus('register_failed');
     });
 
     newUa.on('newRTCSession', (e) => {

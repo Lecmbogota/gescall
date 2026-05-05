@@ -81,6 +81,14 @@ export interface CampaignSettingsTabProps {
     /* General — troncal efectiva (resuelta por módulo Enrutamiento) */
     outboundTrunkSummary?: string | null;
 
+    /** Meta diaria de tipificaciones (widget del workspace del agente) */
+    workspaceDailyTarget: number;
+    setWorkspaceDailyTarget: (n: number) => void;
+    workspaceGoalPeriodDays: number;
+    setWorkspaceGoalPeriodDays: (n: number) => void;
+    workspaceGoalTypificationId: number | null;
+    setWorkspaceGoalTypificationId: (id: number | null) => void;
+
     /* General/Marcación */
     dialLevel: string;
     setDialLevel: (v: string) => void;
@@ -191,7 +199,7 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
         return tpl?.name ?? null;
     }, [props.scheduleTemplates, props.scheduleTemplateId]);
 
-    const SECTIONS_AFFECTING_GENERAL_SAVE: CampaignSettingsSectionId[] = ["dialing", "retries", "teleprompter", "pauses"];
+    const SECTIONS_AFFECTING_GENERAL_SAVE: CampaignSettingsSectionId[] = ["general", "dialing", "retries", "teleprompter", "pauses"];
     const showOperationalFooter =
         props.hasConfigChanges && SECTIONS_AFFECTING_GENERAL_SAVE.includes(active);
 
@@ -203,6 +211,12 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                         campaign={props.campaign}
                         outboundTrunkSummary={props.outboundTrunkSummary}
                         scheduleTemplateName={scheduleTemplateName}
+                        workspaceDailyTarget={props.workspaceDailyTarget}
+                        setWorkspaceDailyTarget={props.setWorkspaceDailyTarget}
+                        workspaceGoalPeriodDays={props.workspaceGoalPeriodDays}
+                        setWorkspaceGoalPeriodDays={props.setWorkspaceGoalPeriodDays}
+                        workspaceGoalTypificationId={props.workspaceGoalTypificationId}
+                        setWorkspaceGoalTypificationId={props.setWorkspaceGoalTypificationId}
                     />
                 );
             case "dialing":
@@ -392,7 +406,11 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                             </span>
                             <div className="text-sm">
                                 <p className="font-medium text-slate-800 leading-tight">Cambios pendientes en {activeDef.label}</p>
-                                <p className="text-[11px] text-slate-500 leading-tight">Guarda para aplicar la nueva configuración al motor de marcado.</p>
+                                <p className="text-[11px] text-slate-500 leading-tight">
+                                    {active === "general"
+                                        ? "Guarda para aplicar metas del workspace y el resto de ajustes operativos."
+                                        : "Guarda para aplicar la nueva configuración al motor de marcado."}
+                                </p>
                             </div>
                         </div>
                         <Button

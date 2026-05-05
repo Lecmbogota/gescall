@@ -22,7 +22,8 @@ import { toast } from "sonner";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
 import { useAuthStore } from "../stores/authStore";
 import authService from "../services/authService";
-import logoURLPro from "./figma/logoURLPro.png";
+import { sanitizeSessionForLog } from "../utils/sanitizeAuthForLog";
+import logoChock from "../logo chock.png";
 
 interface LoginProps {
   onLogin: (username: string) => void;
@@ -109,7 +110,7 @@ export function Login({ onLogin }: LoginProps) {
       // Call the auth service
       const session = await authService.login(username, password, false);
 
-      console.log('[Login] Login successful, session:', session);
+      console.log('[Login] Login successful, session:', sanitizeSessionForLog(session));
 
       // Store session in Zustand store
       setSession(session);
@@ -229,11 +230,11 @@ export function Login({ onLogin }: LoginProps) {
           />
 
           <CardHeader className="space-y-3 text-center relative z-10">
-            <div className="mx-auto w-48 h-24 flex items-center justify-center overflow-hidden rounded-lg">
+            <div className="mx-auto w-56 h-24 flex items-center justify-center overflow-hidden rounded-xl">
               <ImageWithFallback
-                src={logoURLPro}
-                alt="URL Pro Logo"
-                className="w-full h-full object-contain select-none pointer-events-none"
+                src={logoChock}
+                alt="Chock Telecom Logo"
+                className="w-full h-full object-contain select-none pointer-events-none brightness-0"
               />
             </div>
             <CardTitle className="text-slate-900">

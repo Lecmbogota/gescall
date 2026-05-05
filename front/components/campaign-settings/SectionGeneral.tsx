@@ -1,5 +1,10 @@
-import { Info, CheckCircle2, XCircle, PauseCircle, Activity, Cpu, Phone, PhoneIncoming } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Info, CheckCircle2, XCircle, PauseCircle, Activity, Cpu, Phone, PhoneIncoming, Trophy } from "lucide-react";
 import { SectionHeader, SettingsCard } from "./SectionShell";
+import { Label } from "../ui/label";
+import { Input } from "../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import api from "@/services/api";
 
 interface CampaignSummary {
     id: string;
@@ -18,6 +23,12 @@ interface Props {
     campaign: CampaignSummary;
     outboundTrunkSummary?: string | null;
     scheduleTemplateName?: string | null;
+    workspaceDailyTarget: number;
+    setWorkspaceDailyTarget: (n: number) => void;
+    workspaceGoalPeriodDays: number;
+    setWorkspaceGoalPeriodDays: (n: number) => void;
+    workspaceGoalTypificationId: number | null;
+    setWorkspaceGoalTypificationId: (id: number | null) => void;
 }
 
 const TYPE_LABEL: Record<string, { label: string; icon: any; bg: string; text: string }> = {
@@ -33,7 +44,37 @@ const STATUS_LABEL: Record<string, { label: string; icon: any; cls: string }> = 
     inactive: { label: "Inactiva", icon: XCircle, cls: "bg-slate-100 text-slate-600 border-slate-200" },
 };
 
-export function SectionGeneral({ campaign, outboundTrunkSummary, scheduleTemplateName }: Props) {
+const TIP_ALL_VALUE = "__all__";
+
+export function SectionGeneral({
+    campaign,
+    outboundTrunkSummary,
+    scheduleTemplateName,
+    workspaceDailyTarget,
+    setWorkspaceDailyTarget,
+    workspaceGoalPeriodDays,
+    setWorkspaceGoalPeriodDays,
+    workspaceGoalTypificationId,
+    setWorkspaceGoalTypificationId,
+}: Props) {
+    const [typifications, setTypifications] = useState<{ id: number; name: string }[]>([]);
+
+    useEffect(() => {
+        let cancelled = false;
+        api.getTypifications(campaign.id)
+            .then((res: any) => {
+                if (cancelled) return;
+                const rows = Array.isArray(res?.data) ? res.data : [];
+                setTypifications(
+                    rows.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name || `Tipificación #${t.id}` }))
+                );
+            })
+            .catch(() => {
+                if (!cancelled) setTypifications([]);
+            });
+        return () => { cancelled = true; };
+    }, [campaign.id]);
+
     const type = TYPE_LABEL[campaign.campaign_type || "OUTBOUND"] || TYPE_LABEL.OUTBOUND;
     const TypeIcon = type.icon;
     const status = STATUS_LABEL[campaign.status] || STATUS_LABEL.inactive;
@@ -107,6 +148,85 @@ export function SectionGeneral({ campaign, outboundTrunkSummary, scheduleTemplat
                         Cambia entre las secciones del menú lateral para ajustar marcación, reintentos, horario, tipificaciones, disposiciones, CallerID y grabación.
                         Los cambios se guardan por sección.
                     </p>
+                </div>
+            </SettingsCard>
+
+            <SectionHeader
+                icon={<Trophy className="w-5 h-5" />}
+                iconBg="bg-amber-50"
+                iconText="text-amber-700"
+                title="Metas en el workspace del agente"
+                description="Define el objetivo numérico, cuántos días hacia atrás se cuentan las tipificaciones y si solo cuentan resultados de una tipificación concreta en configuración de campaña."
+            />
+
+            <SettingsCard>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="space-y-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800">Objetivo (cantidad)</p>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                            Meta numérica de tipificaciones que aplican la regla (1–100.000).
+                        </p>
+                        <Label htmlFor="workspaceDailyTargetSettings" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider sr-only">
+                            Objetivo
+                        </Label>
+                        <Input
+                            id="workspaceDailyTargetSettings"
+                            type="number"
+                            min={1}
+                            max={100000}
+                            value={workspaceDailyTarget}
+                            onChange={(e) => setWorkspaceDailyTarget(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            placeholder="20"
+                            className="font-mono text-sm max-w-[140px] h-10 rounded-xl border-slate-200"
+                        />
+                    </div>
+
+                    <div className="space-y-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800">Ventana de conteo (días)</p>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                            Se cuentan tipificaciones desde hoy inclusive hacia atrás: 1 = solo hoy; 7 = últimos 7 días (1–366). Usa la fecha local del servidor de base de datos.
+                        </p>
+                        <Label htmlFor="workspaceGoalPeriodDays" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider sr-only">
+                            Días
+                        </Label>
+                        <Input
+                            id="workspaceGoalPeriodDays"
+                            type="number"
+                            min={1}
+                            max={366}
+                            value={workspaceGoalPeriodDays}
+                            onChange={(e) => setWorkspaceGoalPeriodDays(Math.max(1, Math.min(366, parseInt(e.target.value, 10) || 1)))}
+                            className="font-mono text-sm max-w-[140px] h-10 rounded-xl border-slate-200"
+                        />
+                    </div>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-slate-100 space-y-2">
+                    <p className="text-sm font-medium text-slate-800">¿Qué tipificaciones suman +1?</p>
+                    <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
+                        Por defecto cuentan <span className="font-medium text-slate-700">todas</span> las tipificaciones registradas en resultados de llamada.
+                        Si eliges una tipificación concreta (por nombre), solo esos resultados incrementan el progreso hacia la meta.
+                    </p>
+                    <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Tipificación contable</Label>
+                    <Select
+                        value={workspaceGoalTypificationId == null ? TIP_ALL_VALUE : String(workspaceGoalTypificationId)}
+                        onValueChange={(v) => {
+                            if (v === TIP_ALL_VALUE) setWorkspaceGoalTypificationId(null);
+                            else setWorkspaceGoalTypificationId(parseInt(v, 10));
+                        }}
+                    >
+                        <SelectTrigger className="max-w-md h-10 rounded-xl border-slate-200">
+                            <SelectValue placeholder="Todas las tipificaciones" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={TIP_ALL_VALUE}>Todas las tipificaciones</SelectItem>
+                            {typifications.map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>
+                                    {t.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
                 </div>
             </SettingsCard>
         </>

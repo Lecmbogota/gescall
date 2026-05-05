@@ -400,6 +400,25 @@ class ApiService {
     });
   }
 
+  /** Meta del workspace: objetivo, ventana en días y tipificación que cuenta para +1 (null = todas). */
+  async updateCampaignWorkspaceGoal(
+    campaignId: string,
+    payload: {
+      workspace_daily_target: number;
+      workspace_goal_period_days: number;
+      workspace_goal_typification_id: number | null;
+    }
+  ) {
+    return this.request(`/campaigns/${campaignId}/workspace-daily-target`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspace_daily_target: payload.workspace_daily_target,
+        workspace_goal_period_days: payload.workspace_goal_period_days,
+        workspace_goal_typification_id: payload.workspace_goal_typification_id,
+      }),
+    });
+  }
+
   async updateCampaignPredictive(campaignId: string, settings: {
     predictive_target_drop_rate?: number;
     predictive_min_factor?: number;
@@ -469,6 +488,8 @@ class ApiService {
         current: number;
         color: string;
         icon: 'trophy' | 'target' | 'star';
+        periodDays?: number;
+        typificationName?: string | null;
       }>;
       leaderboard: Array<{ rank: number; username: string; score: number; is_self: boolean }>;
     };
@@ -486,6 +507,12 @@ class ApiService {
 
   async verifyAgentWorkspacePausePin(pin: string) {
     return this.post('/agent-workspace/verify-pause-pin', { pin });
+  }
+
+  async setAgentWorkspacePausePin(pin: string, currentPin?: string) {
+    const body: { pin: string; current_pin?: string } = { pin };
+    if (currentPin != null && currentPin !== '') body.current_pin = currentPin;
+    return this.post('/agent-workspace/pause-pin', body);
   }
 
   async getAgentWorkspaceLead(leadId: string) {

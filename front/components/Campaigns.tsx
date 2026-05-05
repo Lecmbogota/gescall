@@ -53,6 +53,8 @@ interface Campaign {
   autoDialLevel?: string;
   maxRetries?: number;
   workspaceDailyTarget?: number;
+  workspaceGoalPeriodDays?: number;
+  workspaceGoalTypificationId?: number | null;
   retrySettings?: Record<string, number>;
   leadStructureSchema?: {name: string, required: boolean, is_phone?: boolean}[];
   ttsTemplates?: any[];
@@ -190,6 +192,8 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 autoDialLevel: camp.auto_dial_level ? String(camp.auto_dial_level) : '0',
                 maxRetries: camp.max_retries ?? 3,
                 workspaceDailyTarget: camp.workspace_daily_target ?? 20,
+                workspaceGoalPeriodDays: camp.workspace_goal_period_days ?? 1,
+                workspaceGoalTypificationId: camp.workspace_goal_typification_id ?? null,
                 retrySettings: camp.retry_settings || undefined,
                 leadStructureSchema: camp.lead_structure_schema || undefined,
                 ttsTemplates: camp.tts_templates || [],
@@ -218,6 +222,8 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 lastActivity: new Date().toISOString(),
                 autoDialLevel: '0',
                 workspaceDailyTarget: camp.workspace_daily_target ?? 20,
+                workspaceGoalPeriodDays: camp.workspace_goal_period_days ?? 1,
+                workspaceGoalTypificationId: camp.workspace_goal_typification_id ?? null,
                 campaign_type: camp.campaign_type || 'BLASTER',
                 agent_count: 0,
                 moh_class: camp.moh_class || null,
@@ -264,10 +270,19 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
       try {
         const res = await api.getCampaignPrefixes();
         if (res.success) {
-          console.log('[Campaigns] Loaded prefixes:', res.data);
+          if (import.meta.env.DEV) {
+            const d = res.data;
+            console.log(
+              '[Campaigns] Loaded prefixes count:',
+              Array.isArray(d) ? d.length : d != null ? typeof d : 0
+            );
+          }
           setPrefixes(res.data);
         } else {
-          console.error('[Campaigns] Prefixes returned success: false', res);
+          console.error(
+            '[Campaigns] Prefixes returned success: false',
+            typeof res === 'object' && res && 'error' in res ? (res as { error?: string }).error : ''
+          );
         }
       } catch (err) {
         console.error('[Campaigns] Error loading prefixes:', err);

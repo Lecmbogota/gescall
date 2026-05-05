@@ -99,13 +99,25 @@ const ScheduleCalendar: React.FC = () => {
             const start = visibleDays[0];
             const end = visibleDays[visibleDays.length - 1];
 
-            console.log('[DEBUG] fetchSchedules - view:', view, 'start:', formatForBackendAPI(start, timezone), 'end:', formatForBackendAPI(end, timezone));
+            if (import.meta.env.DEV) {
+                console.log('[DEBUG] fetchSchedules', {
+                    view,
+                    start: formatForBackendAPI(start, timezone),
+                    end: formatForBackendAPI(end, timezone),
+                });
+            }
 
             const response = await api.getUpcomingSchedules(
                 formatForBackendAPI(start, timezone),
                 formatForBackendAPI(end, timezone)
             );
-            console.log('[DEBUG] fetchSchedules - response:', response);
+            if (import.meta.env.DEV) {
+                const r = response as unknown;
+                console.log(
+                    '[DEBUG] fetchSchedules result',
+                    Array.isArray(r) ? `count=${r.length}` : typeof r
+                );
+            }
             setSchedules(response as Schedule[]);
         } catch (error) {
             toast.error('Error al cargar programaciones');

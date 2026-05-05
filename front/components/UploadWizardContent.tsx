@@ -252,10 +252,11 @@ export function UploadWizardContent({
     const worksheet = workbook.Sheets[firstSheetName];
     const data: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
-    console.log(`[Excel Parser] Sheet: "${firstSheetName}", Rows: ${data.length}`);
-    if (data.length > 0) {
-      console.log(`[Excel Parser] Headers: ${Object.keys(data[0]).join(", ")}`);
-      console.log(`[Excel Parser] First row:`, JSON.stringify(data[0]));
+    if (import.meta.env.DEV) {
+      console.log(`[Excel Parser] Sheet: "${firstSheetName}", Rows: ${data.length}`);
+      if (data.length > 0) {
+        console.log(`[Excel Parser] Headers: ${Object.keys(data[0]).join(", ")}`);
+      }
     }
 
     // Ensure all values are strings (Excel may parse as numbers)

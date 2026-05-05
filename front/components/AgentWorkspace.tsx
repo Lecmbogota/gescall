@@ -10,6 +10,24 @@ import { FloatingTeleprompter } from './FloatingTeleprompter';
 import AnimatedList from './AnimatedList';
 import api from '../services/api';
 import corporateHeaderBg from '../assets/corporate_header_bg.png';
+import { playChatNotificationTone } from '../utils/chatSound';
+import { toast } from 'sonner';
+import { KeyRound } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 
 const AVAILABLE_WIDGETS = [
   { id: 'metas', label: 'Meta de Ventas', icon: <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></>, color: 'text-amber-500' },
@@ -99,7 +117,7 @@ function normalizePauseConfig(raw?: any) {
 }
 
 export const AgentWorkspace: React.FC = () => {
-  const { session, logout } = useAuthStore();
+  const { session, logout, setSession } = useAuthStore();
   const [phoneNumber, setPhoneNumber] = useState('');
 
   const handleLogout = () => {
@@ -115,6 +133,15 @@ export const AgentWorkspace: React.FC = () => {
   
   const sipExtension = (session?.user as any)?.sip_extension;
   const sipPassword = (session?.user as any)?.sip_password;
+
+  const [pausePinSettingsOpen, setPausePinSettingsOpen] = useState(false);
+  const [pausePinCurrent, setPausePinCurrent] = useState('');
+  const [pausePinNew, setPausePinNew] = useState('');
+  const [pausePinConfirm, setPausePinConfirm] = useState('');
+  const [pausePinFormError, setPausePinFormError] = useState<string | null>(null);
+  const [pausePinSaving, setPausePinSaving] = useState(false);
+
+  const hasPausePinConfigured = Boolean(sipPassword && String(sipPassword).trim());
   
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const wsUrl = `${protocol}://${window.location.hostname}/ws`;
@@ -383,6 +410,7 @@ export const AgentWorkspace: React.FC = () => {
   const [chatLastReadSupId, setChatLastReadSupId] = React.useState(0);
   const chatScrollRef = React.useRef<HTMLDivElement | null>(null);
   const [isSupervisorOnline, setIsSupervisorOnline] = useState(false);
+  const [canManualDial, setCanManualDial] = useState(false); // Demo: Inbound only por defecto
 
   const reloadWorkspaceDashboard = React.useCallback(async () => {
     try {
@@ -459,6 +487,9 @@ export const AgentWorkspace: React.FC = () => {
       if (!payload) return;
       if (payload.campaign_id !== activeChatCampaignId) return;
       if (payload.agent_username !== agentUsername) return;
+      if (payload.sender_role === 'SUPERVISOR') {
+        playChatNotificationTone();
+      }
       setChatMessages((prev) => {
         if (prev.some((m) => m.id === payload.id)) return prev;
         return [...prev, payload];
@@ -507,6 +538,42 @@ export const AgentWorkspace: React.FC = () => {
     [chatMessages, chatLastReadSupId]
   );
   const hasSupervisorUnread = supervisorChatUnreadCount > 0 && activeApp !== 'chat';
+  const [showIslandNotification, setShowIslandNotification] = useState(false);
+  const [islandMicroExpand, setIslandMicroExpand] = useState(false);
+  const isCompactIdlePhone = !isPhoneExpanded && callStatus === 'idle' && !canManualDial;
+  const isIslandMessageState = isCompactIdlePhone && hasSupervisorUnread && showIslandNotification;
+  const islandStatusLabel =
+    sipStatus === 'registered'
+      ? 'Disponible'
+      : sipStatus === 'disconnected'
+        ? 'Desconectado'
+        : sipStatus === 'register_failed'
+          ? 'Error de registro SIP'
+          : sipStatus === 'connecting'
+            ? 'Conectando...'
+            : 'Esperando...';
+
+  React.useEffect(() => {
+    if (!(hasSupervisorUnread && isCompactIdlePhone)) {
+      setShowIslandNotification(false);
+      return;
+    }
+    setShowIslandNotification(true);
+    const id = window.setInterval(() => {
+      setShowIslandNotification((prev) => !prev);
+    }, 2200);
+    return () => window.clearInterval(id);
+  }, [hasSupervisorUnread, isCompactIdlePhone]);
+
+  React.useEffect(() => {
+    if (!isIslandMessageState) {
+      setIslandMicroExpand(false);
+      return;
+    }
+    setIslandMicroExpand(true);
+    const t = window.setTimeout(() => setIslandMicroExpand(false), 340);
+    return () => window.clearTimeout(t);
+  }, [isIslandMessageState]);
 
   React.useEffect(() => {
     if (activeApp !== 'chat') return;
@@ -601,7 +668,6 @@ export const AgentWorkspace: React.FC = () => {
 
   const [isTeleprompterVisible, setIsTeleprompterVisible] = useState(false);
   const { settings: teleprompterSettings, updateSetting: updateTeleprompterSetting } = useTeleprompterSettings();
-  const [canManualDial, setCanManualDial] = useState(false); // Demo: Inbound only por defecto
   const [chatHeight, setChatHeight] = useState('h-[320px]');
   const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
   const [isSpeechExpanded, setIsSpeechExpanded] = useState(true);
@@ -674,6 +740,60 @@ export const AgentWorkspace: React.FC = () => {
     [pinVerifying]
   );
 
+  const savePausePinSettings = React.useCallback(async () => {
+    setPausePinFormError(null);
+    const nw = pausePinNew.replace(/\D/g, '').slice(0, 4);
+    const cf = pausePinConfirm.replace(/\D/g, '').slice(0, 4);
+    if (nw.length !== 4) {
+      setPausePinFormError('El nuevo PIN debe tener 4 dígitos');
+      return;
+    }
+    if (nw !== cf) {
+      setPausePinFormError('La confirmación no coincide con el nuevo PIN');
+      return;
+    }
+    if (hasPausePinConfigured) {
+      if (!pausePinCurrent.trim()) {
+        setPausePinFormError('Indica tu PIN actual para cambiarlo');
+        return;
+      }
+    }
+    setPausePinSaving(true);
+    try {
+      const res: any = await api.setAgentWorkspacePausePin(
+        nw,
+        hasPausePinConfigured ? pausePinCurrent.trim() : undefined
+      );
+      if (res?.success) {
+        const full = useAuthStore.getState().session;
+        if (full) {
+          setSession({
+            ...full,
+            user: { ...(full.user as any), sip_password: nw },
+          } as any);
+        }
+        toast.success('PIN guardado. Lo usarás al cambiar de estado en pausas.');
+        setPausePinSettingsOpen(false);
+        setPausePinCurrent('');
+        setPausePinNew('');
+        setPausePinConfirm('');
+      } else {
+        setPausePinFormError(res?.error || 'No se pudo guardar');
+      }
+    } catch (e: unknown) {
+      const err = e as Error;
+      setPausePinFormError(err?.message || 'Error al guardar');
+    } finally {
+      setPausePinSaving(false);
+    }
+  }, [
+    pausePinNew,
+    pausePinConfirm,
+    pausePinCurrent,
+    hasPausePinConfigured,
+    setSession,
+  ]);
+
   React.useEffect(() => {
     let interval: NodeJS.Timeout;
     if (pauseOverlay?.step === 'timer') {
@@ -687,7 +807,7 @@ export const AgentWorkspace: React.FC = () => {
   // Estado hacia Redis / dialer: solo READY recibe marcación entrante/desde cola.
   // Con PIN pendiente enviamos PAUSE_PENDING (no READY, sin fila en reporte hasta confirmar).
   const detailedState = React.useMemo(() => {
-    if (sipStatus === 'disconnected') return 'OFFLINE';
+    if (sipStatus === 'disconnected' || sipStatus === 'register_failed') return 'OFFLINE';
     if (callStatus === 'connected') return 'ON_CALL';
     if (callStatus === 'calling') return 'DIALING';
     if (isTipificarOpen) return 'WRAPUP';
@@ -897,7 +1017,7 @@ export const AgentWorkspace: React.FC = () => {
       if (activeWidgets.includes('teleprompter')) {
         setIsTeleprompterVisible(true);
       }
-    } else if (sipStatus === 'disconnected' || sipStatus === 'registered') {
+    } else if (sipStatus === 'disconnected' || sipStatus === 'registered' || sipStatus === 'register_failed') {
       // Automatically hide the teleprompter when the call ends
       setIsTeleprompterVisible(false);
       setAssignedLeadVars({});
@@ -1128,6 +1248,101 @@ export const AgentWorkspace: React.FC = () => {
   return (
     <div className="flex h-full gap-6 w-full p-2 relative">
       <audio ref={audioRef} autoPlay className="hidden" />
+      <style>{`
+        @keyframes gescall-island-pop {
+          0% { transform: translateZ(0) scaleX(1) scaleY(1); }
+          42% { transform: translateZ(0) scaleX(1.075) scaleY(1.035); }
+          72% { transform: translateZ(0) scaleX(0.992) scaleY(0.996); }
+          100% { transform: translateZ(0) scaleX(1) scaleY(1); }
+        }
+        @keyframes gescall-island-content-in {
+          0% { opacity: 0; transform: translateY(7px) scale(0.96); filter: blur(5px); }
+          100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+        }
+        .gescall-island-pop { animation: gescall-island-pop 340ms cubic-bezier(0.22, 1, 0.36, 1); }
+        .gescall-island-content-in { animation: gescall-island-content-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+      `}</style>
+      <Dialog
+        open={pausePinSettingsOpen}
+        onOpenChange={(open) => {
+          setPausePinSettingsOpen(open);
+          if (!open) {
+            setPausePinCurrent('');
+            setPausePinNew('');
+            setPausePinConfirm('');
+            setPausePinFormError(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>PIN para pausas</DialogTitle>
+            <DialogDescription>
+              Se usa al cambiar de estado durante las pausas (entrada y salida). Coincide con la clave SIP de tu extensión para el teléfono web.
+            </DialogDescription>
+            {hasPausePinConfigured ? (
+              <p className="text-sm text-amber-800/90 dark:text-amber-200/90 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/50 px-3 py-2">
+                En «Clave SIP / PIN actual» debes poner <strong>esa clave SIP</strong>, no la contraseña con la que inicias sesión en GesCall. El navegador a veces autocompleta la contraseña de acceso y entonces marca error.
+              </p>
+            ) : null}
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {hasPausePinConfigured && (
+              <div>
+                <label className="text-sm font-medium text-slate-700">Clave SIP / PIN actual</label>
+                <input
+                  type="password"
+                  name="gescall-sip-secret-current"
+                  value={pausePinCurrent}
+                  onChange={(e) => setPausePinCurrent(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  placeholder="La que usa tu extensión hoy (puede ser texto o 4 dígitos)"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+            <div>
+              <label className="text-sm font-medium text-slate-700">
+                {hasPausePinConfigured ? 'Nuevo PIN (4 dígitos)' : 'PIN (4 dígitos)'}
+              </label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={pausePinNew}
+                onChange={(e) => setPausePinNew(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-center text-xl tracking-widest font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                placeholder="••••"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700">Confirmar PIN</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={pausePinConfirm}
+                onChange={(e) => setPausePinConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-center text-xl tracking-widest font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                placeholder="••••"
+                autoComplete="new-password"
+              />
+            </div>
+            {pausePinFormError && <p className="text-sm text-red-600">{pausePinFormError}</p>}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPausePinSettingsOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={savePausePinSettings} disabled={pausePinSaving}>
+              {pausePinSaving ? 'Guardando…' : 'Guardar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {pauseOverlay?.isOpen && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex flex-col items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full flex flex-col items-center relative overflow-hidden">
@@ -1280,7 +1495,7 @@ export const AgentWorkspace: React.FC = () => {
 
         {/* User Profile & Hidden Logout */}
         <div className={`pt-4 border-t border-slate-200 group relative w-full ${!isLeftSidebarOpen ? 'flex justify-center' : ''}`}>
-          <div className={`flex items-center p-2 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center'}`} title="Cerrar sesión o ver perfil">
+          <div className={`flex items-center p-2 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center gap-1'}`} title="Cerrar sesión o ver perfil">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm shadow-inner shrink-0">
                 {((session?.user as any)?.username || (session?.user as any)?.name || 'AG').substring(0, 2).toUpperCase()}
@@ -1297,16 +1512,73 @@ export const AgentWorkspace: React.FC = () => {
               </div>
               )}
             </div>
-            {isLeftSidebarOpen && (
-            <button className="p-2 text-slate-400 hover:text-slate-700 transition-colors rounded-lg">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-            </button>
+            {isLeftSidebarOpen ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="p-2 text-slate-400 hover:text-slate-700 transition-colors rounded-lg"
+                  aria-label="Opciones de cuenta"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => {
+                    setTimeout(() => setPausePinSettingsOpen(true), 0);
+                  }}
+                >
+                  <KeyRound className="mr-2 h-4 w-4 shrink-0" />
+                  PIN de pausas…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 transition-colors"
+                  title="PIN de pausas"
+                  aria-label="Configurar PIN de pausas"
+                >
+                  <KeyRound className="w-4 h-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" side="right" className="w-56">
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => {
+                    setTimeout(() => setPausePinSettingsOpen(true), 0);
+                  }}
+                >
+                  <KeyRound className="mr-2 h-4 w-4 shrink-0" />
+                  PIN de pausas…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             )}
           </div>
           
           {/* Hidden Logout Menu (appears on hover of the profile section) */}
           <div className="absolute bottom-full left-0 w-full pb-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-            <div className="bg-white border border-slate-200 rounded-xl shadow-lg p-1">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-lg p-1 flex flex-col gap-0.5">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPausePinSettingsOpen(true);
+                }}
+                className={`w-full flex items-center gap-2 py-2.5 text-slate-700 hover:bg-slate-50 rounded-lg transition-colors font-medium text-sm ${isLeftSidebarOpen ? 'px-4' : 'px-0 justify-center'}`}
+                title="PIN para cambiar de estado en pausas"
+              >
+                <KeyRound className="w-4 h-4 shrink-0" />
+                {isLeftSidebarOpen && 'PIN de pausas'}
+              </button>
               <button 
                 onClick={handleLogout}
                 className={`w-full flex items-center gap-2 py-2.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors font-medium text-sm ${isLeftSidebarOpen ? 'px-4' : 'px-0 justify-center'}`}
@@ -1505,18 +1777,27 @@ export const AgentWorkspace: React.FC = () => {
         {/* iPhone WebPhone Container (Fixed) */}
         <div className="shrink-0 pt-2 z-40 flex justify-center mb-6">
           <div 
-            className={`bg-[#0A0A0C] shadow-2xl relative overflow-hidden flex flex-col transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] mx-auto 
+            className={`bg-[#0A0A0C] shadow-2xl relative overflow-hidden flex flex-col transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] mx-auto transform-gpu 
               ${isPhoneExpanded 
                 ? 'w-[300px] h-[600px] rounded-[45px] border-[6px] border-slate-800' 
                 : (callStatus !== 'idle' 
                     ? 'w-[280px] h-[64px] rounded-[32px] border-[2px] border-green-500/50 shadow-[0_0_20px_rgba(34,197,94,0.3)] cursor-pointer hover:border-green-400' 
                     : (canManualDial 
                         ? 'w-[300px] h-[72px] rounded-[36px] border-[4px] border-slate-800 cursor-pointer hover:border-slate-700'
-                        : 'w-[240px] h-[44px] rounded-[22px] border-[2px] border-slate-800 cursor-pointer hover:border-slate-700')
+                        : (isIslandMessageState
+                            ? 'w-[286px] h-[54px] rounded-[28px] border-[2px] border-cyan-300/45 shadow-[0_14px_38px_rgba(8,47,73,0.38),0_0_28px_rgba(34,211,238,0.24)] cursor-pointer hover:border-cyan-200/70'
+                            : (hasSupervisorUnread
+                                ? 'w-[254px] h-[46px] rounded-[24px] border-[2px] border-cyan-300/30 shadow-[0_10px_28px_rgba(8,47,73,0.28),0_0_20px_rgba(34,211,238,0.14)] cursor-pointer hover:border-cyan-200/50'
+                                : 'w-[240px] h-[44px] rounded-[22px] border-[2px] border-slate-800 cursor-pointer hover:border-slate-700')
+                              )
+                          )
                   )
-              }`}
+              } ${islandMicroExpand ? 'gescall-island-pop' : ''}`}
             onClick={() => {
               if (!isPhoneExpanded) {
+                if (hasSupervisorUnread && callStatus === 'idle' && !canManualDial) {
+                  setActiveApp('chat');
+                }
                 setIsPhoneExpanded(true);
               }
             }}
@@ -1531,18 +1812,16 @@ export const AgentWorkspace: React.FC = () => {
               }
             }}
           >
-            {!isPhoneExpanded && hasSupervisorUnread && (
+            {isCompactIdlePhone && hasSupervisorUnread && (
               <>
-                <div className="pointer-events-none absolute -inset-1 rounded-[40px] border border-cyan-400/60 animate-pulse"></div>
-                <div className="pointer-events-none absolute -inset-2 rounded-[44px] border border-cyan-300/30 animate-pulse [animation-delay:220ms]"></div>
-                <div className="absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-[#0A0A0C] flex items-center justify-center tabular-nums z-20">
-                  {supervisorChatUnreadCount > 99 ? '99+' : supervisorChatUnreadCount}
-                </div>
+                <div className="pointer-events-none absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_24%_50%,rgba(34,211,238,0.18),transparent_35%),linear-gradient(90deg,rgba(14,165,233,0.12),transparent_48%,rgba(244,63,94,0.10))]"></div>
+                <div className={`pointer-events-none absolute -inset-1 rounded-[inherit] border border-cyan-300/35 shadow-[0_0_24px_rgba(34,211,238,0.22)] transition-opacity duration-500 ${isIslandMessageState ? 'opacity-100' : 'opacity-55'}`}></div>
+                <div className="pointer-events-none absolute inset-y-0 -left-10 w-10 rotate-12 bg-gradient-to-r from-transparent via-white/20 to-transparent blur-md animate-pulse"></div>
               </>
             )}
 
             {/* Compact Mini Phone Content (Fades out when expanded) */}
-            <div className={`absolute inset-0 flex items-center justify-between px-4 transition-opacity duration-300 ${!isPhoneExpanded ? 'opacity-100 delay-200 z-10' : 'opacity-0 pointer-events-none z-0'}`}>
+            <div className={`absolute inset-0 flex items-center justify-between px-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${!isPhoneExpanded ? 'opacity-100 delay-200 z-10' : 'opacity-0 pointer-events-none z-0'}`}>
               {callStatus !== 'idle' ? (
                 <div className="w-full flex items-center justify-between px-1">
                   <div className="flex items-center gap-3">
@@ -1581,17 +1860,39 @@ export const AgentWorkspace: React.FC = () => {
                   </button>
                 </>
               ) : (
-                <div className={`w-full flex items-center justify-center gap-2 ${sipStatus === 'registered' ? 'text-green-400' : sipStatus === 'disconnected' ? 'text-red-400' : 'text-slate-400'}`}>
-                  <div className="relative flex items-center justify-center w-3 h-3">
-                    <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-40 ${sipStatus === 'registered' ? 'bg-green-500' : sipStatus === 'disconnected' ? 'bg-red-500' : 'bg-slate-500'}`}></span>
-                    <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${sipStatus === 'registered' ? 'bg-green-400' : sipStatus === 'disconnected' ? 'bg-red-400' : 'bg-slate-400'}`}></span>
-                  </div>
-                  <span className="text-xs font-medium tracking-wide">
-                    {sipStatus === 'registered' ? 'Disponible' : 
-                     sipStatus === 'disconnected' ? 'Desconectado' : 
-                     sipStatus === 'connecting' ? 'Conectando...' : 
-                     'Esperando...'}
-                  </span>
+                <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
+                  {isIslandMessageState ? (
+                    <div key="message" className="gescall-island-content-in w-full flex items-center justify-between gap-3 text-white">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="relative h-7 w-7 shrink-0 rounded-full bg-gradient-to-br from-cyan-300 via-sky-400 to-blue-600 shadow-[0_0_18px_rgba(34,211,238,0.38)] flex items-center justify-center">
+                          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[#ff3b30] border border-[#0A0A0C]"></span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </div>
+                        <div className="min-w-0 leading-none">
+                          <div className="text-[12px] font-semibold tracking-[-0.01em] text-white truncate">Nuevo mensaje</div>
+                          <div className="mt-1 text-[9px] font-medium text-cyan-100/70 truncate">Supervisor</div>
+                        </div>
+                      </div>
+                      <div className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-[#ff3b30] text-white text-[10px] font-bold flex items-center justify-center tabular-nums shadow-[0_0_12px_rgba(255,59,48,0.35)]">
+                        {supervisorChatUnreadCount > 99 ? '99+' : supervisorChatUnreadCount}
+                      </div>
+                    </div>
+                  ) : (
+                    <div key="status" className={`gescall-island-content-in relative w-full flex items-center justify-center gap-2 ${sipStatus === 'registered' ? 'text-green-400' : sipStatus === 'disconnected' || sipStatus === 'register_failed' ? 'text-red-400' : 'text-slate-400'}`}>
+                      <div className="relative flex items-center justify-center w-3 h-3">
+                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-40 ${sipStatus === 'registered' ? 'bg-green-500' : sipStatus === 'disconnected' || sipStatus === 'register_failed' ? 'bg-red-500' : 'bg-slate-500'}`}></span>
+                        <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${sipStatus === 'registered' ? 'bg-green-400' : sipStatus === 'disconnected' || sipStatus === 'register_failed' ? 'bg-red-400' : 'bg-slate-400'}`}></span>
+                      </div>
+                      <span className="text-xs font-medium tracking-wide">{islandStatusLabel}</span>
+                      {hasSupervisorUnread && (
+                        <span className="absolute right-0 min-w-[18px] h-[18px] px-1 rounded-full bg-[#ff3b30] text-white text-[9px] font-bold flex items-center justify-center tabular-nums">
+                          {supervisorChatUnreadCount > 99 ? '99+' : supervisorChatUnreadCount}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

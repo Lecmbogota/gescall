@@ -40,6 +40,10 @@ interface Campaign {
   dialingMethod: string;
   activeAgents: number;
   lastActivity: string;
+  /** Sincronizado al guardar metas desde el detalle de campaña */
+  workspaceDailyTarget?: number;
+  workspaceGoalPeriodDays?: number;
+  workspaceGoalTypificationId?: number | null;
 }
 
 /** Menús retirados: limpia favorito guardado para no abrir una vista huérfana. */
@@ -199,6 +203,12 @@ export default function App() {
               onBack={() => handleNavigate('campaigns')}
               username={username}
               userLevel={getUserLevel()}
+              onUpdateCampaign={(patch) => {
+                setSelectedCampaign((prev) => {
+                  if (!prev) return null;
+                  return patch ? { ...prev, ...patch } : prev;
+                });
+              }}
             />
           );
         }

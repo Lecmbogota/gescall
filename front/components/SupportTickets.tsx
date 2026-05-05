@@ -230,7 +230,13 @@ export function SupportTickets() {
     useEffect(() => {
         socket.connect();
         const handler = (data: any) => {
-            console.log('[SupportTickets] ticket:updated event:', data);
+            if (import.meta.env.DEV) {
+                const id =
+                    data && typeof data === 'object' && 'id' in data
+                        ? (data as { id?: unknown }).id
+                        : undefined;
+                console.log('[SupportTickets] ticket:updated (dev)', { id });
+            }
             toast.info('Ticket actualizado desde Jira', { duration: 3000 });
             // Silently refresh the list (no loading spinner)
             api.getTickets(statusFilter ? { status: statusFilter } : undefined)

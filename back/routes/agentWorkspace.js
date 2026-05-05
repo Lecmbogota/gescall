@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pg = require('../config/pgDatabase');
+const { regeneratePjsipGescallUsers } = require('../services/regeneratePjsipGescallUsers');
 const { canManageSupervisorAgentActions: canManageAgentWorkspace } = require('../lib/supervisorAgentPermissions');
 
 function emitWorkspaceRefresh(req, payload = {}) {
@@ -126,31 +127,70 @@ router.get('/dashboard', async (req, res) => {
 
         let goalRows = [];
         if (campaigns.length > 0) {
-            const { rows: g } = await pg.query(
-                `SELECT c.campaign_id,
+            const goalsQueryFull = `SELECT c.campaign_id,
                         c.campaign_name,
                         COALESCE(c.workspace_daily_target, 20) AS workspace_daily_target,
-                        COALESCE(t.cnt, 0)::int AS current_count
+                        COALESCE(c.workspace_goal_period_days, 1) AS workspace_goal_period_days,
+                        c.workspace_goal_typification_id,
+                        gt.name AS workspace_goal_typification_name,
+                        COALESCE(cnt.cnt, 0)::int AS current_count
                  FROM gescall_campaigns c
-                 LEFT JOIN (
-                     SELECT campaign_id, COUNT(*)::int AS cnt
-                     FROM gescall_typification_results
-                     WHERE agent_username = $1
-                       AND created_at >= CURRENT_DATE
-                       AND campaign_id = ANY($2::varchar[])
-                     GROUP BY campaign_id
-                 ) t ON t.campaign_id = c.campaign_id
+                 LEFT JOIN gescall_typifications gt
+                    ON gt.id = c.workspace_goal_typification_id AND gt.campaign_id = c.campaign_id
+                 LEFT JOIN LATERAL (
+                     SELECT COUNT(*)::int AS cnt
+                     FROM gescall_typification_results tr
+                     WHERE tr.campaign_id = c.campaign_id
+                       AND tr.agent_username = $1
+                       AND tr.created_at::date >= CURRENT_DATE - (COALESCE(c.workspace_goal_period_days, 1) - 1)
+                       AND (c.workspace_goal_typification_id IS NULL OR tr.typification_id = c.workspace_goal_typification_id)
+                 ) cnt ON true
                  WHERE c.active = true AND c.campaign_id = ANY($2::varchar[])
-                 ORDER BY c.campaign_name`,
-                [username, campaigns]
-            );
-            goalRows = g;
+                 ORDER BY c.campaign_name`;
+            try {
+                const { rows: g } = await pg.query(goalsQueryFull, [username, campaigns]);
+                goalRows = g;
+            } catch (goalErr) {
+                const msg = goalErr && goalErr.message ? String(goalErr.message) : '';
+                if (
+                    msg.includes('workspace_goal_typification_id') ||
+                    msg.includes('workspace_goal_period_days')
+                ) {
+                    console.warn(
+                        '[agent-workspace] dashboard goals: migración 034 no aplicada; using legacy goal query'
+                    );
+                    const { rows: g } = await pg.query(
+                        `SELECT c.campaign_id,
+                                c.campaign_name,
+                                COALESCE(c.workspace_daily_target, 20) AS workspace_daily_target,
+                                1 AS workspace_goal_period_days,
+                                NULL::int AS workspace_goal_typification_id,
+                                NULL::text AS workspace_goal_typification_name,
+                                COALESCE(cnt.cnt, 0)::int AS current_count
+                         FROM gescall_campaigns c
+                         LEFT JOIN LATERAL (
+                             SELECT COUNT(*)::int AS cnt
+                             FROM gescall_typification_results tr
+                             WHERE tr.campaign_id = c.campaign_id
+                               AND tr.agent_username = $1
+                               AND tr.created_at::date >= CURRENT_DATE
+                         ) cnt ON true
+                         WHERE c.active = true AND c.campaign_id = ANY($2::varchar[])
+                         ORDER BY c.campaign_name`,
+                        [username, campaigns]
+                    );
+                    goalRows = g;
+                } else {
+                    throw goalErr;
+                }
+            }
         }
 
         const goals = goalRows.map((row, idx) => {
             const pal = GOAL_PALETTE[idx % GOAL_PALETTE.length];
             const target = Math.max(1, parseInt(row.workspace_daily_target, 10) || 20);
             const current = Math.max(0, parseInt(row.current_count, 10) || 0);
+            const periodDays = Math.max(1, parseInt(row.workspace_goal_period_days, 10) || 1);
             return {
                 id: row.campaign_id,
                 campaignName: row.campaign_name || row.campaign_id,
@@ -158,6 +198,8 @@ router.get('/dashboard', async (req, res) => {
                 current,
                 color: pal.color,
                 icon: pal.icon,
+                periodDays,
+                typificationName: row.workspace_goal_typification_name || null,
             };
         });
 
@@ -224,10 +266,56 @@ router.post('/verify-pause-pin', async (req, res) => {
         }
 
         if (pin !== expectedPin) {
-            return res.status(401).json({ success: false, error: 'PIN inválido' });
+            return res.status(400).json({ success: false, error: 'PIN inválido' });
         }
 
         return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+/**
+ * POST /api/agent-workspace/pause-pin
+ * Permite al agente autenticado definir o cambiar el PIN usado en pausas (campo sip_password).
+ * body: { pin: string (4 dígitos), current_pin?: string — obligatorio si ya había PIN }
+ */
+router.post('/pause-pin', async (req, res) => {
+    try {
+        const pinRaw = req.body && req.body.pin != null ? String(req.body.pin).trim() : '';
+        const currentRaw =
+            req.body && req.body.current_pin != null ? String(req.body.current_pin).trim() : '';
+
+        if (!/^\d{4}$/.test(pinRaw)) {
+            return res.status(400).json({ success: false, error: 'El PIN debe ser exactamente 4 dígitos' });
+        }
+
+        const { rows } = await pg.query(
+            `SELECT sip_password FROM gescall_users WHERE user_id = $1 LIMIT 1`,
+            [req.user.user_id]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
+        }
+
+        const existing = rows[0].sip_password != null ? String(rows[0].sip_password).trim() : '';
+        if (existing) {
+            if (!currentRaw) {
+                return res.status(400).json({ success: false, error: 'Indica tu PIN o clave SIP actual para cambiarlo' });
+            }
+            if (currentRaw !== existing) {
+                return res.status(400).json({ success: false, error: 'PIN actual incorrecto' });
+            }
+        }
+
+        await pg.query(`UPDATE gescall_users SET sip_password = $1 WHERE user_id = $2`, [
+            pinRaw,
+            req.user.user_id,
+        ]);
+
+        await regeneratePjsipGescallUsers();
+
+        return res.json({ success: true, message: 'PIN actualizado' });
     } catch (e) {
         return res.status(500).json({ success: false, error: e.message });
     }

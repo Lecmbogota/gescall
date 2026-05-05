@@ -295,6 +295,7 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
     const getCampaignIds = useAuthStore((state) => state.getCampaignIds);
     /** null = aún cargando; [] = sin campañas elegibles para IVR */
     const [ivrCampaignOptions, setIvrCampaignOptions] = useState<IvrCampaignPick[] | null>(null);
+    const [campaignOptions, setCampaignOptions] = useState<IvrCampaignPick[]>([]);
     const [ttsTemplates, setTtsTemplates] = useState<any[]>([]);
     const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
@@ -319,6 +320,12 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
                     setIvrCampaignOptions([]);
                     return;
                 }
+                const allCampaigns: IvrCampaignPick[] = res.data
+                    .filter((c) => !isCampaignArchived(c))
+                    .map((c) => ({
+                        id: String(c.campaign_id),
+                        name: String(c.campaign_name || c.campaign_id || ''),
+                    }));
                 const opts: IvrCampaignPick[] = res.data
                     .filter(
                         (c) =>
@@ -329,10 +336,14 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
                         id: String(c.campaign_id),
                         name: String(c.campaign_name || c.campaign_id || ''),
                     }));
+                setCampaignOptions(allCampaigns);
                 setIvrCampaignOptions(opts);
             })
             .catch(() => {
-                if (!cancelled) setIvrCampaignOptions([]);
+                if (!cancelled) {
+                    setCampaignOptions([]);
+                    setIvrCampaignOptions([]);
+                }
             });
         return () => {
             cancelled = true;
@@ -849,6 +860,15 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
                                         if (currentAudioType === 'Audio' && field.name === 'text') return null;
                                         if (currentAudioType === 'TTS' && field.name === 'filename') return null;
                                     }
+                                    if (selectedNode.data.nodeType === 'transfer') {
+                                        const currentDestination = selectedNode.data.destinationType || (selectedNode.data.targetCampaignId || (!selectedNode.data.number && !selectedNode.data.agentUsername && !selectedNode.data.agentExtension) ? 'Campaña' : (selectedNode.data.agentUsername || selectedNode.data.agentExtension) ? 'Agente' : 'Número externo');
+                                        const campaignOnly = ['targetCampaignId'];
+                                        const agentOnly = ['agentUsername', 'agentExtension'];
+                                        const externalOnly = ['number', 'trunk', 'prefix', 'overflowNumber'];
+                                        if (currentDestination !== 'Campaña' && campaignOnly.includes(field.name)) return null;
+                                        if (currentDestination !== 'Agente' && agentOnly.includes(field.name)) return null;
+                                        if (currentDestination !== 'Número externo' && externalOnly.includes(field.name)) return null;
+                                    }
 
                                     return (
                                      <div key={field.name} className="ivr-builder__config-field">
@@ -891,6 +911,11 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
                                             >
                                                 <option value="">Seleccionar...</option>
                                                 {(() => {
+                                                    if (field.name === 'targetCampaignId') {
+                                                        return campaignOptions.map((opt) => (
+                                                            <option key={opt.id} value={opt.id}>{opt.id} — {opt.name || opt.id}</option>
+                                                        ));
+                                                    }
                                                     if (field.name !== 'status') {
                                                         return field.options?.map((opt) => (
                                                             <option key={opt} value={opt}>{opt}</option>

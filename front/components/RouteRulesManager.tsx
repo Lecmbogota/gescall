@@ -99,8 +99,8 @@ interface CampaignOpt {
 }
 
 const DEST_INBOUND: { value: string; label: string }[] = [
-  { value: 'CAMPAIGN_QUEUE', label: 'Cola de campaña (directo)' },
-  { value: 'IVR_THEN_QUEUE', label: 'IVR y luego cola' },
+  { value: 'CAMPAIGN_QUEUE', label: 'Campaña' },
+  { value: 'IVR_THEN_QUEUE', label: 'IVR' },
 ];
 
 const DID_KIND_OPTIONS: { value: 'EXACT' | 'PREFIX' | 'REGEX'; label: string }[] = [
@@ -828,7 +828,7 @@ export function RouteRulesManager() {
                     <p>
                       Destino:{' '}
                       <strong>
-                        {simRule.destination_type === 'IVR_THEN_QUEUE' ? 'IVR → cola' : 'Cola directa'}
+                        {simRule.destination_type === 'IVR_THEN_QUEUE' ? 'IVR' : 'Campaña'}
                       </strong>
                       {' · '}
                       Campaña:{' '}
@@ -1121,7 +1121,7 @@ export function RouteRulesManager() {
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">
-                          {row.destination_type === 'IVR_THEN_QUEUE' ? 'IVR → cola' : 'Cola'}
+                          {row.destination_type === 'IVR_THEN_QUEUE' ? 'IVR' : 'Campaña'}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -1199,7 +1199,7 @@ export function RouteRulesManager() {
                     DID y tipo: exacto o prefijo para la mayoría de casos. Regex solo tras activar el conmutador
                     debajo del formulario.
                   </li>
-                  <li>Tipo de destino y campaña.</li>
+                  <li>Tipo de destino: campaña directa o IVR.</li>
                   <li>
                     Abre «Opciones avanzadas» solo si necesitas prioridad distinta de <strong>100</strong>.
                   </li>

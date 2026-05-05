@@ -119,13 +119,9 @@ export const StickyNotesWidget: React.FC = () => {
               sensitivity={100}
               sendToBackOnClick={false}
               cards={notes.map((note) => (
-                <motion.div 
-                  layoutId={`note-${note.id}`}
+                <div
                   key={note.id} 
                   onDoubleClick={(e) => { e.stopPropagation(); setExpandSource('stack'); setExpandedNote(note); }}
-                  transition={{ 
-                    layout: { type: "spring", bounce: 0.2, duration: 0.6 }
-                  }}
                   className={`w-full h-full rounded-2xl shadow-lg border p-4 relative group flex flex-col transition-colors duration-300 ${colorClasses[note.color].bg} ${colorClasses[note.color].border}`}
                 >
                   <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-8 h-3 rounded-b-md ${colorClasses[note.color].header}`}></div>
@@ -155,7 +151,7 @@ export const StickyNotesWidget: React.FC = () => {
                     value={note.content}
                     readOnly
                   ></textarea>
-                </motion.div>
+                </div>
               ))}
             />
           )}
@@ -239,7 +235,7 @@ export const StickyNotesWidget: React.FC = () => {
                 onClick={() => setExpandedNote(null)}
               ></motion.div>
               <motion.div 
-                layoutId={expandSource === 'grid' ? `grid-note-${expandedNote.id}` : `note-${expandedNote.id}`}
+                layoutId={expandSource === 'grid' ? `grid-note-${expandedNote.id}` : undefined}
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}

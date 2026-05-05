@@ -133,7 +133,12 @@ export function Dashboard({ username }: DashboardProps) {
     // 2. Suscripción a WebSockets para métricas en tiempo real de Redis
     const handleDashboardUpdate = (updateData: any) => {
       if (!isSubscribed) return;
-      console.log('[Dashboard] 📡 Real-time Redis update received:', updateData);
+      if (import.meta.env.DEV) {
+        console.log('[Dashboard] Real-time update (dev)', {
+          hasStats: Boolean(updateData?.stats),
+          campaignsCount: Array.isArray(updateData?.campaigns) ? updateData.campaigns.length : 0,
+        });
+      }
 
       // Si el backend envía las estadísticas como updateData.stats
       if (updateData?.stats) {
@@ -866,7 +871,9 @@ export function Dashboard({ username }: DashboardProps) {
             id={widgetId}
             color="yellow"
             onSave={(id, note) => {
-              console.log("Nota guardada:", id, note);
+              if (import.meta.env.DEV) {
+                console.log('Nota guardada (dev)', id, typeof note === 'string' ? note.length : 0, 'chars');
+              }
             }}
           />
         );
@@ -876,7 +883,14 @@ export function Dashboard({ username }: DashboardProps) {
           <TodoListWidget
             id={widgetId}
             onUpdate={(id, todos) => {
-              console.log("Tareas actualizadas:", id, todos);
+              if (import.meta.env.DEV) {
+                console.log(
+                  'Tareas actualizadas (dev)',
+                  id,
+                  Array.isArray(todos) ? todos.length : 0,
+                  'items'
+                );
+              }
             }}
           />
         );

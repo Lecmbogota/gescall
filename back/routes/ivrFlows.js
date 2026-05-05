@@ -82,9 +82,13 @@ module.exports = function (database) {
         },
         {
             type: 'transfer', label: 'Transferir', icon: 'PhoneForwarded', color: '#10b981',
-            description: 'Transfiere la llamada a un número externo',
+            description: 'Transfiere la llamada a una campaña, agente o número externo',
             fields: [
-                { name: 'number', label: 'Número destino', type: 'text', required: true, placeholder: 'Ej: 573152092535' },
+                { name: 'destinationType', label: 'Destino', type: 'select', options: ['Campaña', 'Agente', 'Número externo'], default: 'Campaña' },
+                { name: 'targetCampaignId', label: 'Campaña destino', type: 'select', placeholder: 'Selecciona la campaña destino' },
+                { name: 'agentUsername', label: 'Usuario agente', type: 'text', placeholder: 'Ej: agente1' },
+                { name: 'agentExtension', label: 'Extensión agente', type: 'text', placeholder: 'Opcional si el usuario tiene extensión' },
+                { name: 'number', label: 'Número externo', type: 'text', placeholder: 'Ej: 573152092535' },
                 { name: 'trunk', label: 'Troncal', type: 'select', options: ['PJSIP/chock', 'SIP/gs102', 'SIP/10000'], default: 'PJSIP/chock' },
                 { name: 'prefix', label: 'Prefijo de marcado', type: 'text', placeholder: 'Ej: 1122 (se antepone al número)' },
                 { name: 'overflowNumber', label: 'Número de desborde', type: 'text', placeholder: 'Si no contesta, transferir a...' },
