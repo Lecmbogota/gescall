@@ -111,9 +111,7 @@ import { DateRangePicker } from 'react-date-range';
 import { es } from 'date-fns/locale';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
-import { CampaignCallerIdSettings } from './CampaignCallerIdSettings';
-import CampaignTypifications from './CampaignTypifications';
-import CampaignDispositions from './CampaignDispositions';
+import { CampaignSettingsTab } from './campaign-settings/CampaignSettingsTab';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getDetailDisplayStatus, translateLeadStatus } from "@/utils/callStatusUtils";
@@ -258,81 +256,6 @@ const getHexColor = (origColor: string) => {
     }
 };
 
-type DialScheduleWindowUI = { id: string; days: number[]; start: string; end: string };
-
-const DIAL_SCHED_TZ_PRESETS = [
-    'America/Mexico_City',
-    'America/Bogota',
-    'America/Lima',
-    'America/Santiago',
-    'America/Argentina/Buenos_Aires',
-    'America/Caracas',
-    'America/New_York',
-    'America/Los_Angeles',
-    'Europe/Madrid',
-    'UTC',
-];
-
-const DIAL_DAY_LABELS: { v: number; l: string }[] = [
-    { v: 1, l: 'Lun' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mié' }, { v: 4, l: 'Jue' },
-    { v: 5, l: 'Vie' }, { v: 6, l: 'Sáb' }, { v: 0, l: 'Dom' },
-];
-
-function newDialWindowId() {
-    return `w${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function padHHMM(t: string, fallback: string) {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
-    if (!m) return fallback;
-    const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
-    const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
-    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
-
-function dialScheduleFromCampaign(c: Campaign): { enabled: boolean; timezone: string; windows: DialScheduleWindowUI[] } {
-    const ds = c.dialSchedule;
-    if (!ds || typeof ds !== 'object') {
-        return {
-            enabled: false,
-            timezone: 'America/Mexico_City',
-            windows: [{ id: newDialWindowId(), days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }],
-        };
-    }
-    const windows =
-        Array.isArray(ds.windows) && ds.windows.length > 0
-            ? ds.windows.map((w, i) => ({
-                  id: `w${i}-${(w.start as string) || 'x'}-${(w.end as string) || 'y'}`,
-                  days: Array.isArray(w.days)
-                      ? w.days.filter((d) => typeof d === 'number' && d >= 0 && d <= 6)
-                      : [1, 2, 3, 4, 5],
-                  start: padHHMM(typeof w.start === 'string' ? w.start : '', '09:00'),
-                  end: padHHMM(typeof w.end === 'string' ? w.end : '', '18:00'),
-              }))
-            : [{ id: newDialWindowId(), days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }];
-    return {
-        enabled: !!ds.enabled,
-        timezone: typeof ds.timezone === 'string' && ds.timezone.trim() ? ds.timezone.trim() : 'America/Mexico_City',
-        windows,
-    };
-}
-
-function serializeDialSchedulePayload(parts: {
-    enabled: boolean;
-    timezone: string;
-    windows: DialScheduleWindowUI[];
-}) {
-    return JSON.stringify({
-        enabled: parts.enabled,
-        timezone: parts.timezone,
-        windows: parts.windows.map(({ days, start, end }) => ({
-            days: [...days].sort((a, b) => a - b),
-            start: padHHMM(start, '09:00'),
-            end: padHHMM(end, '18:00'),
-        })),
-    });
-}
-
 interface Campaign {
     id: string;
     name: string;
@@ -359,6 +282,7 @@ interface Campaign {
         timezone?: string;
         windows?: { days?: number[]; start?: string; end?: string }[];
     };
+    scheduleTemplateId?: number | null;
     recording_settings?: {
         enabled?: boolean;
         storage?: string;
@@ -434,6 +358,14 @@ export function CampaignDetailPage({
 }: CampaignDetailPageProps) {
     const timezone = useSettingsStore((state) => state.timezone);
     const [activeTab, setActiveTab] = useState(campaign.campaign_type === 'BLASTER' ? "reports" : "monitor");
+
+    // La pestaña de plantillas TTS solo existe en BLASTER; evitar estado huérfano
+    useEffect(() => {
+        if (activeTab === "tts_templates" && campaign.campaign_type !== "BLASTER") {
+            setActiveTab("config");
+        }
+    }, [activeTab, campaign.campaign_type, campaign.id]);
+
     const [campaignStatus, setCampaignStatus] = useState(campaign.status);
     const [isToggling, setIsToggling] = useState(false);
     const [dialLevel, setDialLevel] = useState(campaign.autoDialLevel || "1.0");
@@ -460,11 +392,11 @@ export function CampaignDetailPage({
     const [predMinFactor, setPredMinFactor] = useState<number>(campaign.predictive_min_factor ?? 1.0);
     const [predMaxFactor, setPredMaxFactor] = useState<number>(campaign.predictive_max_factor ?? 4.0);
 
-    const initialDial = dialScheduleFromCampaign(campaign);
-    const [dialSchedEnabled, setDialSchedEnabled] = useState(initialDial.enabled);
-    const [dialSchedTimezone, setDialSchedTimezone] = useState(initialDial.timezone);
-    const [dialSchedWindows, setDialSchedWindows] = useState<DialScheduleWindowUI[]>(initialDial.windows);
-    const [savingDialSchedule, setSavingDialSchedule] = useState(false);
+    // Selector de plantilla de horario reutilizable (sustituye al editor inline).
+    const [scheduleTemplates, setScheduleTemplates] = useState<{ id: number; name: string; enabled: boolean; timezone: string; windows: { days: number[]; start: string; end: string }[] }[]>([]);
+    const [scheduleTemplateId, setScheduleTemplateId] = useState<number | null>(campaign.scheduleTemplateId ?? null);
+    const [savingScheduleTemplate, setSavingScheduleTemplate] = useState(false);
+    const [loadingScheduleTemplates, setLoadingScheduleTemplates] = useState(false);
 
     // Recording Settings state
     const recSettings = campaign.recording_settings || {};
@@ -647,11 +579,27 @@ export function CampaignDetailPage({
         if (campaign.predictive_max_factor !== undefined) {
             setPredMaxFactor(campaign.predictive_max_factor);
         }
-        const nextDial = dialScheduleFromCampaign(campaign);
-        setDialSchedEnabled(nextDial.enabled);
-        setDialSchedTimezone(nextDial.timezone);
-        setDialSchedWindows(nextDial.windows);
-    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule]);
+        setScheduleTemplateId(campaign.scheduleTemplateId ?? null);
+    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule, campaign.scheduleTemplateId]);
+
+    // Carga las plantillas de horario disponibles (una sola vez por sesión de detalle).
+    useEffect(() => {
+        let cancelled = false;
+        setLoadingScheduleTemplates(true);
+        api.listScheduleTemplates()
+            .then((res: any) => {
+                if (cancelled) return;
+                const list = Array.isArray(res?.data) ? res.data : [];
+                setScheduleTemplates(list);
+            })
+            .catch((err) => {
+                console.error('[CampaignDetailPage] listScheduleTemplates error:', err);
+            })
+            .finally(() => {
+                if (!cancelled) setLoadingScheduleTemplates(false);
+            });
+        return () => { cancelled = true; };
+    }, []);
 
     useEffect(() => {
         const fetchCps = async () => {
@@ -707,41 +655,20 @@ export function CampaignDetailPage({
         return false;
     }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, predTargetDropRate, predMinFactor, predMaxFactor, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type]);
 
-    const dialScheduleDirty = useMemo(() => {
-        const current = serializeDialSchedulePayload({
-            enabled: dialSchedEnabled,
-            timezone: dialSchedTimezone,
-            windows: dialSchedWindows,
-        });
-        const saved = serializeDialSchedulePayload(dialScheduleFromCampaign(campaign));
-        return current !== saved;
-    }, [dialSchedEnabled, dialSchedTimezone, dialSchedWindows, campaign.dialSchedule, campaign.id]);
+    const scheduleTemplateDirty = useMemo(() => {
+        return (scheduleTemplateId ?? null) !== (campaign.scheduleTemplateId ?? null);
+    }, [scheduleTemplateId, campaign.scheduleTemplateId]);
 
-    const handleSaveDialSchedule = async () => {
-        if (dialSchedEnabled) {
-            const bad = dialSchedWindows.some((w) => !w.days || w.days.length === 0);
-            if (bad) {
-                toast.error('Cada ventana debe incluir al menos un día de la semana.');
-                return;
-            }
-        }
-        setSavingDialSchedule(true);
+    const handleSaveScheduleTemplate = async () => {
+        setSavingScheduleTemplate(true);
         try {
-            await api.updateCampaignDialSchedule(campaign.id, {
-                enabled: dialSchedEnabled,
-                timezone: dialSchedTimezone,
-                windows: dialSchedWindows.map(({ days, start, end }) => ({
-                    days,
-                    start: padHHMM(start, '09:00'),
-                    end: padHHMM(end, '18:00'),
-                })),
-            });
-            toast.success('Horario de discado guardado');
+            await api.setCampaignScheduleTemplate(campaign.id, scheduleTemplateId);
+            toast.success(scheduleTemplateId ? 'Horario asignado a la campaña' : 'Horario removido de la campaña');
             if (onUpdateCampaign) onUpdateCampaign();
         } catch (error: any) {
-            toast.error(error.message || 'Error al guardar horario');
+            toast.error(error.message || 'Error al guardar el horario');
         } finally {
-            setSavingDialSchedule(false);
+            setSavingScheduleTemplate(false);
         }
     };
 
@@ -1280,9 +1207,19 @@ export function CampaignDetailPage({
         fetchBaseStats();
         fetchCampaignLists();
         fetchDialLog();
-        fetchAgents();
+        if (campaign.campaign_type !== 'BLASTER') {
+            fetchAgents();
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [campaign.id]);
+
+    // Blaster: discado sin cola de agentes; no hay pestañas Monitor ni Agentes.
+    useEffect(() => {
+        if (campaign.campaign_type !== 'BLASTER') return;
+        setActiveTab((prev) =>
+            prev === 'monitor' || prev === 'agents' ? 'reports' : prev
+        );
+    }, [campaign.id, campaign.campaign_type]);
 
     // Listen for real-time agent status updates via WebSocket
     // Active for all campaign types that have the Monitor tab
@@ -1855,10 +1792,12 @@ export function CampaignDetailPage({
                                     Listas
                                 </TabsTrigger>
                             )}
-                            <TabsTrigger value="agents" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                <User className="w-4 h-4" />
-                                Agentes
-                            </TabsTrigger>
+                            {campaign.campaign_type !== 'BLASTER' && (
+                                <TabsTrigger value="agents" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <User className="w-4 h-4" />
+                                    Agentes
+                                </TabsTrigger>
+                            )}
                             <TabsTrigger value="config" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
                                 <Settings className="w-4 h-4" />
                                 Ajustes
@@ -1870,16 +1809,16 @@ export function CampaignDetailPage({
                                 </TabsTrigger>
                             )}
                             {campaign.campaign_type !== 'INBOUND' && (
-                                <>
-                                    <TabsTrigger value="structure" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                        <Database className="w-4 h-4" />
-                                        Estructura
-                                    </TabsTrigger>
-                                    <TabsTrigger value="tts_templates" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                        <Sparkles className="w-4 h-4" />
-                                        Plantillas TTS
-                                    </TabsTrigger>
-                                </>
+                                <TabsTrigger value="structure" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <Database className="w-4 h-4" />
+                                    Estructura
+                                </TabsTrigger>
+                            )}
+                            {campaign.campaign_type === 'BLASTER' && (
+                                <TabsTrigger value="tts_templates" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
+                                    <Sparkles className="w-4 h-4" />
+                                    Plantillas TTS
+                                </TabsTrigger>
                             )}
                         </TabsList>
                     </div>
@@ -2203,7 +2142,14 @@ export function CampaignDetailPage({
                                                             </TableCell>
                                                         );
                                                         if (col.id === 'sys_disposicion') {
-                                                            return <TableCell key={col.id} className="text-sm text-slate-700">{record.disposition || 'Desconocido'}</TableCell>;
+                                                            // Disposición = tipificación del agente si existe; si no, etiqueta normalizada del call_status
+                                                            // (mismo helper que el badge de Estado). Evita "Desconocido" sistemático
+                                                            // cuando la BD no tiene una columna `disposition` propia.
+                                                            const dispoLabel = record.typification_name
+                                                                || record.disposition
+                                                                || displayStatus.label
+                                                                || '—';
+                                                            return <TableCell key={col.id} className="text-sm text-slate-700">{dispoLabel}</TableCell>;
                                                         }
                                                         if (col.id === 'sys_quien_colgo') {
                                                             const cause = record.hangup_cause;
@@ -2447,6 +2393,7 @@ export function CampaignDetailPage({
                 </TabsContent>
 
                 {/* Tab: Config */}
+                {campaign.campaign_type !== 'BLASTER' && (
                 <TabsContent value="agents" forceMount className="flex-1 overflow-auto bg-white/60 backdrop-blur-md rounded-2xl border border-white/80 shadow-sm p-6 mt-0 data-[state=inactive]:hidden text-left relative z-0">
                     <div className="max-w-4xl mx-auto space-y-6">
                         <div className="flex items-center justify-between">
@@ -2571,790 +2518,70 @@ export function CampaignDetailPage({
                         )}
                     </div>
                 </TabsContent>
+                )}
 
                 <TabsContent value="config" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden" >
-                    <div className="space-y-6">
-                        
-                        {/* Tipificaciones y Formularios */}
-                        <div className="w-full">
-                            <CampaignTypifications campaignId={campaign.id} />
-                        </div>
-
-                        {/* Disposiciones */}
-                        <div className="w-full">
-                            <CampaignDispositions campaignId={campaign.id} />
-                        </div>
-
-                        {campaign.campaign_type !== 'INBOUND' && (
-                            <Card className="shadow-sm border border-amber-200/50 bg-gradient-to-br from-amber-50/40 to-white/70 backdrop-blur-md rounded-2xl overflow-hidden">
-                                <CardHeader className="py-4 border-b border-amber-100/60 bg-white/50">
-                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-amber-100 rounded-lg text-amber-700">
-                                                <Clock className="w-5 h-5" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-base">Horario de discado</CardTitle>
-                                                <CardDescription className="text-xs">
-                                                    Fuera de estas ventanas el marcador no originará llamadas para esta campaña (los leads permanecen en el hopper).
-                                                </CardDescription>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-3 shrink-0">
-                                            <Label htmlFor="dialSchedEn" className="text-xs text-slate-600 whitespace-nowrap">
-                                                Restringir por horario
-                                            </Label>
-                                            <Switch
-                                                id="dialSchedEn"
-                                                checked={dialSchedEnabled}
-                                                onCheckedChange={setDialSchedEnabled}
-                                                className="data-[state=checked]:bg-amber-600"
-                                            />
-                                        </div>
-                                    </div>
-                                </CardHeader>
-                                <CardContent className="p-5 space-y-5">
-                                    {dialSchedEnabled && (
-                                        <>
-                                            <div className="space-y-2">
-                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                    Zona horaria (IANA)
-                                                </Label>
-                                                <div className="flex flex-col sm:flex-row gap-2">
-                                                    <Select value={dialSchedTimezone} onValueChange={setDialSchedTimezone}>
-                                                        <SelectTrigger className="font-mono text-sm h-10 bg-white sm:max-w-xs">
-                                                            <SelectValue placeholder="Zona" />
-                                                        </SelectTrigger>
-                                                        <SelectContent className="rounded-xl max-h-64">
-                                                            {DIAL_SCHED_TZ_PRESETS.map((tz) => (
-                                                                <SelectItem key={tz} value={tz} className="font-mono text-xs">
-                                                                    {tz}
-                                                                </SelectItem>
-                                                            ))}
-                                                        </SelectContent>
-                                                    </Select>
-                                                    <Input
-                                                        className="font-mono text-sm h-10 bg-white flex-1"
-                                                        value={dialSchedTimezone}
-                                                        onChange={(e) => setDialSchedTimezone(e.target.value.trim())}
-                                                        placeholder="p. ej. America/Mexico_City"
-                                                    />
-                                                </div>
-                                                <p className="text-[10px] text-slate-400">
-                                                    Debe coincidir con la base de datos IANA del servidor (Go). Si la zona no existe, el marcador usará UTC.
-                                                </p>
-                                            </div>
-
-                                            <div className="space-y-3">
-                                                <div className="flex items-center justify-between">
-                                                    <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                        Ventanas permitidas
-                                                    </Label>
-                                                    <Button
-                                                        type="button"
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="h-8 gap-1 rounded-lg"
-                                                        onClick={() =>
-                                                            setDialSchedWindows((prev) => [
-                                                                ...prev,
-                                                                {
-                                                                    id: newDialWindowId(),
-                                                                    days: [1, 2, 3, 4, 5],
-                                                                    start: '09:00',
-                                                                    end: '18:00',
-                                                                },
-                                                            ])
-                                                        }
-                                                    >
-                                                        <Plus className="w-3.5 h-3.5" />
-                                                        Añadir ventana
-                                                    </Button>
-                                                </div>
-
-                                                {dialSchedWindows.map((win) => (
-                                                    <div
-                                                        key={win.id}
-                                                        className="rounded-xl border border-slate-200/80 bg-white/80 p-4 space-y-3 shadow-sm"
-                                                    >
-                                                        <div className="flex flex-wrap gap-1.5">
-                                                            {DIAL_DAY_LABELS.map(({ v, l }) => {
-                                                                const on = win.days.includes(v);
-                                                                return (
-                                                                    <button
-                                                                        key={v}
-                                                                        type="button"
-                                                                        onClick={() =>
-                                                                            setDialSchedWindows((prev) =>
-                                                                                prev.map((w) =>
-                                                                                    w.id !== win.id
-                                                                                        ? w
-                                                                                        : {
-                                                                                              ...w,
-                                                                                              days: on
-                                                                                                  ? w.days.filter((d) => d !== v)
-                                                                                                  : [...w.days, v].sort(
-                                                                                                        (a, b) =>
-                                                                                                            (a === 0 ? 7 : a) -
-                                                                                                            (b === 0 ? 7 : b)
-                                                                                                    ),
-                                                                                          }
-                                                                                )
-                                                                            )
-                                                                        }
-                                                                        className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors ${
-                                                                            on
-                                                                                ? 'bg-amber-500 text-white border-amber-600'
-                                                                                : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
-                                                                        }`}
-                                                                    >
-                                                                        {l}
-                                                                    </button>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-end">
-                                                            <div>
-                                                                <Label className="text-[10px] text-slate-500 uppercase">Inicio</Label>
-                                                                <Input
-                                                                    type="time"
-                                                                    className="h-9 mt-1 font-mono text-sm"
-                                                                    value={padHHMM(win.start, '09:00')}
-                                                                    onChange={(e) =>
-                                                                        setDialSchedWindows((prev) =>
-                                                                            prev.map((w) =>
-                                                                                w.id === win.id ? { ...w, start: e.target.value } : w
-                                                                            )
-                                                                        )
-                                                                    }
-                                                                />
-                                                            </div>
-                                                            <div>
-                                                                <Label className="text-[10px] text-slate-500 uppercase">Fin</Label>
-                                                                <Input
-                                                                    type="time"
-                                                                    className="h-9 mt-1 font-mono text-sm"
-                                                                    value={padHHMM(win.end, '18:00')}
-                                                                    onChange={(e) =>
-                                                                        setDialSchedWindows((prev) =>
-                                                                            prev.map((w) =>
-                                                                                w.id === win.id ? { ...w, end: e.target.value } : w
-                                                                            )
-                                                                        )
-                                                                    }
-                                                                />
-                                                            </div>
-                                                            <div className="sm:col-span-1 col-span-2 flex justify-end">
-                                                                <Button
-                                                                    type="button"
-                                                                    variant="ghost"
-                                                                    size="sm"
-                                                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                                                    disabled={dialSchedWindows.length <= 1}
-                                                                    onClick={() =>
-                                                                        setDialSchedWindows((prev) =>
-                                                                            prev.length <= 1 ? prev : prev.filter((w) => w.id !== win.id)
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    <Trash2 className="w-4 h-4 mr-1" />
-                                                                    Quitar
-                                                                </Button>
-                                                            </div>
-                                                        </div>
-                                                        <p className="text-[10px] text-slate-400">
-                                                            Si la hora de fin es menor que la de inicio en el mismo día, se interpreta como ventana nocturna (cruza medianoche).
-                                                        </p>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </>
-                                    )}
-
-                                    <div className="flex justify-end pt-1">
-                                        <Button
-                                            type="button"
-                                            onClick={handleSaveDialSchedule}
-                                            disabled={savingDialSchedule || !dialScheduleDirty}
-                                            className="gap-2 rounded-xl min-w-[180px]"
-                                        >
-                                            {savingDialSchedule ? (
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                            ) : (
-                                                <Save className="w-4 h-4" />
-                                            )}
-                                            {savingDialSchedule ? 'Guardando…' : 'Guardar horario'}
-                                        </Button>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        )}
-                        
-                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                            
-                            {/* Card: Nivel de Marcado (Columna 1) */}
-                            <div className="xl:col-span-1 space-y-4">
-                                <h3 className="text-sm font-semibold tracking-wide text-slate-500 uppercase px-2">Estrategia de Marcación</h3>
-                                <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300">
-                                    <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
-                                                <Zap className="w-4 h-4" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-sm font-semibold">Nivel de Auto-Marcación</CardTitle>
-                                                <CardDescription className="text-xs">Velocidad y llamadas simultáneas por agente.</CardDescription>
-                                            </div>
-                                        </div>
-                                    </CardHeader>
-                                    <CardContent className="p-5 flex flex-col gap-5">
-                                        <div className="w-full">
-                                            <Label htmlFor="dialLevel" className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">Ratio de Marcación</Label>
-                                            <Select value={dialLevel?.toString() || "1.0"} onValueChange={setDialLevel}>
-                                                <SelectTrigger id="dialLevel" className="font-mono text-lg h-11 w-full bg-white shadow-sm">
-                                                    <SelectValue placeholder="Ratio" />
-                                                </SelectTrigger>
-                                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                                    {[1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0].map((ratio) => (
-                                                        <SelectItem key={ratio} value={ratio.toFixed(1)}>
-                                                            {ratio.toFixed(1)}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                        {cpsAvailability && (
-                                            <div className="w-full bg-slate-50/50 p-3.5 rounded-xl border border-slate-200/60 flex flex-col gap-2">
-                                                <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5"><Network className="w-3.5 h-3.5 text-blue-500" /> Bolsa Global CPS</span>
-                                                <div className="flex justify-between items-center bg-white px-3 py-1.5 rounded flex-1 border border-slate-100 shadow-sm">
-                                                    <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Disponibles</span>
-                                                    <span className={`text-sm font-bold ${cpsAvailability.available_cps <= 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-                                                        {cpsAvailability.available_cps} <span className="text-slate-400 font-normal">/ {cpsAvailability.total_cps}</span>
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
-
-                                {/* Card: Troncal de Salida */}
-                                <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 mt-4">
-                                    <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-violet-100 rounded-lg text-violet-600">
-                                                <Network className="w-4 h-4" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-sm font-semibold">Troncal de Salida</CardTitle>
-                                                <CardDescription className="text-xs">Ruta por la que salen las llamadas</CardDescription>
-                                            </div>
-                                        </div>
-                                    </CardHeader>
-                                    <CardContent className="p-5">
-                                        <div className="w-full">
-                                            <Label htmlFor="trunkSelect" className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">Troncal Asignada</Label>
-                                            <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
-                                                <SelectTrigger id="trunkSelect" className="font-mono text-sm h-11 w-full bg-white shadow-sm">
-                                                    <SelectValue placeholder="Sin troncal asignada" />
-                                                </SelectTrigger>
-                                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                                    <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
-                                                    {availableTrunks.map((trunk: any) => (
-                                                        <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
-                                                            {trunk.trunk_name} ({trunk.trunk_id})
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                            <p className="text-[10px] text-slate-400 mt-2 italic">La troncal por la que se enrutarán las llamadas de esta campaña.</p>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-
-                                {/* Predictive Config — only for OUTBOUND_PREDICTIVE campaigns */}
-                                {campaign.campaign_type === 'OUTBOUND_PREDICTIVE' && (
-                                <>
-                                <h3 className="text-sm font-semibold tracking-wide text-slate-500 uppercase px-2 mt-6">Predictivo Adaptativo</h3>
-                                <Card className="shadow-sm border border-blue-200/60 bg-gradient-to-br from-blue-50/30 to-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 mt-4">
-                                    <CardHeader className="py-4 border-b border-blue-100/50 bg-blue-50/20">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
-                                                <Activity className="w-4 h-4" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-sm font-semibold">Ajuste Dinámico</CardTitle>
-                                                <CardDescription className="text-xs">El marcador se auto-regula según tasa de abandono real.</CardDescription>
-                                            </div>
-                                        </div>
-                                    </CardHeader>
-                                    <CardContent className="p-5 flex flex-col gap-4">
-                                        <div className="w-full">
-                                            <div className="flex justify-between items-center mb-1.5">
-                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tasa de Abandono Máxima</Label>
-                                                <span className="text-xs font-mono text-slate-400">{(predTargetDropRate * 100).toFixed(1)}%</span>
-                                            </div>
-                                            <Input
-                                                type="range"
-                                                min="1"
-                                                max="20"
-                                                step="0.5"
-                                                value={Math.round(predTargetDropRate * 100)}
-                                                onChange={(e) => setPredTargetDropRate(parseFloat(e.target.value) / 100)}
-                                                className="w-full h-2 accent-blue-500"
-                                            />
-                                            <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
-                                                <span>1%</span>
-                                                <span>10%</span>
-                                                <span>20%</span>
-                                            </div>
-                                            <p className="text-[10px] text-slate-400 mt-1.5 italic">Porcentaje máximo de llamadas abandonadas aceptable.</p>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Factor Mínimo</Label>
-                                                <Input
-                                                    type="number"
-                                                    min="0.5"
-                                                    max="3.0"
-                                                    step="0.1"
-                                                    value={predMinFactor}
-                                                    onChange={(e) => setPredMinFactor(parseFloat(e.target.value) || 1.0)}
-                                                    className="font-mono text-sm h-9 bg-white shadow-sm"
-                                                />
-                                                <p className="text-[10px] text-slate-400 mt-1">Llamadas mínimas por agente.</p>
-                                            </div>
-                                            <div>
-                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Factor Máximo</Label>
-                                                <Input
-                                                    type="number"
-                                                    min="1.5"
-                                                    max="10.0"
-                                                    step="0.1"
-                                                    value={predMaxFactor}
-                                                    onChange={(e) => setPredMaxFactor(parseFloat(e.target.value) || 4.0)}
-                                                    className="font-mono text-sm h-9 bg-white shadow-sm"
-                                                />
-                                                <p className="text-[10px] text-slate-400 mt-1">Límite superior de llamadas por agente.</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="bg-slate-50/70 p-3 rounded-lg border border-slate-100 text-[10px] text-slate-500 leading-relaxed">
-                                            <p className="font-semibold text-slate-600 mb-1">Cómo funciona:</p>
-                                            <p>El sistema monitorea en tiempo real cuántas llamadas contestan versus cuántas abandonan. Si la tasa de abandono supera el objetivo, reduce automáticamente el ritmo para proteger los leads. Si está por debajo, incrementa gradualmente la velocidad de marcación.</p>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                                </>
-                                )}
-                            </div>
-
-                            {/* Card: Gestión de Reintentos Unificada (Columnas 2 y 3) */}
-                            <div className="xl:col-span-2 space-y-4">
-                                <h3 className="text-sm font-semibold tracking-wide text-slate-500 uppercase px-2">Sistema de Reintentos</h3>
-                                <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 h-[calc(100%-2rem)]">
-                                    <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
-                                        <div className="flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-purple-100 rounded-lg text-purple-600">
-                                                <Repeat className="w-5 h-5" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-base">Gestión y Tiempos de Reintentos</CardTitle>
-                                                <CardDescription className="text-xs">Límites y matriz de enfriamiento dinámico</CardDescription>
-                                            </div>
-                                        </div>
-                                        <div className="bg-white/60 p-2 rounded-xl border border-slate-100 shadow-sm flex items-center gap-3 px-4">
-                                            <Label htmlFor="maxRetries" className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-0 text-nowrap">Intentos Máx.</Label>
-                                            <Select value={maxRetries.toString()} onValueChange={(val) => setMaxRetries(parseInt(val) || 0)}>
-                                                <SelectTrigger id="maxRetries" className="font-mono text-base h-8 w-20 text-center border-slate-200 shadow-inner">
-                                                    <SelectValue placeholder="Ej. 3" />
-                                                </SelectTrigger>
-                                                <SelectContent className="rounded-xl shadow-xl border-slate-100 min-w-[5rem]">
-                                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
-                                                        <SelectItem key={num} value={num.toString()}>
-                                                            {num}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </div>
-                                </CardHeader>
-                                <CardContent className="pt-5">
-                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                        <Activity className="w-3.5 h-3.5" />
-                                        <span>Minutos de Enfriamiento por Disposición</span>
-                                    </h4>
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
-                                        {Object.entries({
-                                            Rechazada: { desc: "Colgó la llamada o IVR", color: "text-orange-600" },
-                                            Ocupado: { desc: "Red ocupada", color: "text-purple-600" },
-                                            Buzon: { desc: "Contestadora automática", color: "text-indigo-600" },
-                                            Cortada: { desc: "Corte SIP o carrier", color: "text-red-500" },
-                                            NoContesta: { desc: "Ninguna respuesta humana", color: "text-yellow-600" },
-                                            FalloTecnico: { desc: "Error genérico FAILED", color: "text-slate-600" }
-                                        }).map(([key, info]) => {
-                                            const groupKey = key as keyof typeof retryGroups;
-                                            const isEnabled = retryGroups[groupKey].enabled;
-                                            return (
-                                            <div key={key} className={`flex items-center justify-between p-3 rounded-xl border transition-colors ${isEnabled ? 'bg-slate-50/50 border-slate-100/80 hover:bg-slate-50 hover:border-slate-200' : 'bg-slate-100/40 border-slate-200/50 opacity-75 grayscale-[30%]'}`}>
-                                                <div className="flex flex-col gap-1 w-1/2">
-                                                    <Label className="text-xs font-semibold text-slate-700 tracking-wider flex items-center gap-1.5 cursor-pointer" onClick={() => setRetryGroups({ ...retryGroups, [groupKey]: { ...retryGroups[groupKey], enabled: !isEnabled } })}>
-                                                        <span className={`w-2 h-2 rounded-full ${isEnabled ? 'bg-current ' + info.color : 'bg-slate-300'}`} />
-                                                        {key.replace(/([A-Z])/g, ' $1').trim()}
-                                                    </Label>
-                                                    <p className="text-[10px] text-slate-400 font-medium leading-tight truncate px-3.5" title={info.desc}>{info.desc}</p>
-                                                </div>
-                                                <div className="flex items-center gap-3">
-                                                    <div className="relative flex-none w-[70px]">
-                                                        <Input
-                                                            type="number"
-                                                            min="1"
-                                                            value={retryGroups[groupKey].minutes}
-                                                            onChange={(e) => setRetryGroups({ ...retryGroups, [groupKey]: { ...retryGroups[groupKey], minutes: Math.max(parseInt(e.target.value) || 1, 1) } })}
-                                                            disabled={!isEnabled}
-                                                            className="font-mono pr-6 bg-white border-slate-200 h-8 text-center text-sm disabled:bg-slate-100/50 disabled:text-slate-400 focus-visible:ring-1 shadow-inner focus-visible:ring-offset-0"
-                                                        />
-                                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] uppercase text-slate-400 font-bold tracking-wider">m</div>
-                                                    </div>
-                                                    <div className="w-px h-5 bg-slate-200" />
-                                                    <Switch 
-                                                        checked={isEnabled} 
-                                                        onCheckedChange={(checked) => setRetryGroups({ ...retryGroups, [groupKey]: { ...retryGroups[groupKey], enabled: checked } })} 
-                                                        className="scale-75 origin-right data-[state=checked]:bg-emerald-500 shadow-sm" 
-                                                    />
-                                                </div>
-                                            </div>
-                                        )})}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </div>
-                        </div>
-
-                        {/* Botón de Guardado General */}
-                        <div className="flex items-center justify-end pt-2">
-                            <Button
-                                onClick={handleSaveGeneralSettings}
-                                disabled={savingGeneral || !hasConfigChanges}
-                                className="gap-2 min-w-[200px] h-11 rounded-xl shadow-lg shadow-blue-500/10"
-                            >
-                                {savingGeneral ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                    <Save className="w-4 h-4" />
-                                )}
-                                {savingGeneral ? "Guardando..." : "Guardar Ajustes Generales"}
-                            </Button>
-                        </div>
-
-                        <div className="relative py-4 mt-8 mb-4">
-                            <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                                <div className="w-full border-t border-slate-200/60" />
-                            </div>
-                            <div className="relative flex justify-center">
-                                <button
-                                    onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-                                    className="px-4 py-1.5 bg-white border border-slate-200 rounded-full text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 hover:border-slate-300 transition-colors shadow-sm flex items-center gap-2"
-                                >
-                                    AVANZADO
-                                    {showAdvancedSettings ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                                </button>
-                            </div>
-                        </div>
-
-                        {showAdvancedSettings && (
-                            <Card className="shadow-sm border border-white/80 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 mb-8">
-                                <CardHeader className="pb-3 border-b border-slate-100/50 bg-white/40">
-                                    <div className="flex items-center gap-3">
-                                        <div className="p-2 bg-slate-100 rounded-lg text-slate-600">
-                                            <Phone className="w-5 h-5" />
-                                        </div>
-                                        <div>
-                                            <CardTitle className="text-base font-medium">CallerID Local Presence</CardTitle>
-                                            <CardDescription className="text-xs">
-                                                Configura la rotación automática de CallerID basada en el prefijo del lead.
-                                                <Badge variant="outline" className="ml-2 text-[10px] bg-slate-50">Experimental</Badge>
-                                            </CardDescription>
-                                        </div>
-                                    </div>
-                                </CardHeader>
-                                <CardContent className="p-6">
-                                    <CampaignCallerIdSettings campaignId={campaign.id} />
-                                </CardContent>
-                            </Card>
-                        )}
-
-                        {/* Recording Settings Card */}
-                        <Card className="shadow-sm border border-slate-200/60 bg-white/60 backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300">
-                            <CardHeader className="py-4 border-b border-slate-100/50 bg-white/40">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-red-100 rounded-lg text-red-600">
-                                        <Mic className="w-5 h-5" />
-                                    </div>
-                                    <div>
-                                        <CardTitle className="text-base">Ajustes de Grabación de Llamadas</CardTitle>
-                                        <CardDescription className="text-xs">Define el almacenamiento y la nomenclatura de las grabaciones.</CardDescription>
-                                    </div>
-                                </div>
-                            </CardHeader>
-                            <CardContent className="p-6 space-y-5">
-                                {/* Recording Toggle */}
-                                <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200/60 bg-slate-50/30">
-                                    <div className="flex items-center gap-3">
-                                        <FileAudio className="w-5 h-5 text-red-500" />
-                                        <div>
-                                            <Label className="text-sm font-semibold text-slate-700">Grabación de Llamadas</Label>
-                                            <p className="text-[11px] text-slate-400">Activa o desactiva la grabación para esta campaña.</p>
-                                        </div>
-                                    </div>
-                                    <Switch 
-                                        checked={recordingEnabled} 
-                                        onCheckedChange={setRecordingEnabled} 
-                                        className="data-[state=checked]:bg-red-500 shadow-sm" 
-                                    />
-                                </div>
-
-                                {/* Storage Destination + External Config + Filename */}
-                                {recordingEnabled && (
-                                <>
-                                <div className="space-y-2">
-                                    <Label htmlFor="recordingStorage" className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Destino de Almacenamiento</Label>
-                                    <Select value={recordingStorage} onValueChange={(val) => { setRecordingStorage(val); setRecordingApprovedSnapshot(null); }}>
-                                        <SelectTrigger id="recordingStorage" className="font-mono text-sm h-11 w-full bg-white shadow-sm">
-                                            <SelectValue placeholder="Seleccionar destino..." />
-                                        </SelectTrigger>
-                                        <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                            <SelectItem value="local">
-                                                <div className="flex items-center gap-2">
-                                                    <HardDrive className="w-4 h-4 text-slate-500" />
-                                                    Local
-                                                </div>
-                                            </SelectItem>
-                                            <SelectItem value="external">
-                                                <div className="flex items-center gap-2">
-                                                    <Link2 className="w-4 h-4 text-blue-500" />
-                                                    Externo
-                                                </div>
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    <p className="text-[10px] text-slate-400">Selecciona dónde se almacenarán los archivos de audio.</p>
-                                </div>
-
-                                {/* External Storage Configuration */}
-                                {recordingStorage === 'external' && (
-                                    <div className="space-y-4 p-4 rounded-xl border border-blue-200/60 bg-blue-50/30">
-                                        <div className="space-y-2">
-                                            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tipo de Conexión</Label>
-                                            <Select value={recordingExternalType} onValueChange={(val) => { setRecordingExternalType(val); setRecordingApprovedSnapshot(null); }}>
-                                                <SelectTrigger className="font-mono text-sm h-11 w-full bg-white shadow-sm">
-                                                    <SelectValue placeholder="Seleccionar tipo..." />
-                                                </SelectTrigger>
-                                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                                    <SelectItem value="sftp">SFTP</SelectItem>
-                                                    <SelectItem value="ftp">FTP</SelectItem>
-                                                    <SelectItem value="s3">S3 (Amazon)</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-
-                                        {/* FTP / SFTP Fields */}
-                                        {(recordingExternalType === 'sftp' || recordingExternalType === 'ftp') && (
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Host / IP</Label>
-                                                    <Input 
-                                                        value={recordingHost} 
-                                                        onChange={(e) => { setRecordingHost(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="192.168.1.100"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Puerto</Label>
-                                                    <Input 
-                                                        value={recordingPort} 
-                                                        onChange={(e) => { setRecordingPort(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder={recordingExternalType === 'sftp' ? '22' : '21'}
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Usuario</Label>
-                                                    <Input 
-                                                        value={recordingUsername} 
-                                                        onChange={(e) => { setRecordingUsername(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="usuario"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Contraseña</Label>
-                                                    <Input 
-                                                        type="password"
-                                                        value={recordingPassword} 
-                                                        onChange={(e) => { setRecordingPassword(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="••••••••"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* S3 Fields */}
-                                        {recordingExternalType === 's3' && (
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Access Key</Label>
-                                                    <Input 
-                                                        value={recordingAccessKey} 
-                                                        onChange={(e) => { setRecordingAccessKey(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="AKIA..."
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Secret Key</Label>
-                                                    <Input 
-                                                        type="password"
-                                                        value={recordingSecretKey} 
-                                                        onChange={(e) => { setRecordingSecretKey(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="••••••••"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Región</Label>
-                                                    <Input 
-                                                        value={recordingRegion} 
-                                                        onChange={(e) => { setRecordingRegion(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="us-east-1"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label className="text-xs font-semibold text-slate-500">Bucket</Label>
-                                                    <Input 
-                                                        value={recordingBucket} 
-                                                        onChange={(e) => { setRecordingBucket(e.target.value); setRecordingApprovedSnapshot(null); }}
-                                                        placeholder="mi-bucket"
-                                                        className="h-10 text-sm bg-white"
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Test Connection */}
-                                        <div className="flex items-center justify-between pt-3 border-t border-blue-200/40">
-                                            <div className="flex items-center gap-2">
-                                                {isRecordingConnectionApproved ? (
-                                                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs gap-1.5">
-                                                        <CheckCircle className="w-3.5 h-3.5" /> Conexión verificada
-                                                    </Badge>
-                                                ) : (
-                                                    <span className="text-xs text-amber-600 font-medium">La conexión no ha sido verificada</span>
-                                                )}
-                                            </div>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={handleTestRecordingConnection}
-                                                disabled={testingConnection || !recordingHost || (recordingExternalType === 's3' && (!recordingAccessKey || !recordingSecretKey || !recordingRegion || !recordingBucket))}
-                                                className="h-9 text-sm gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 ml-auto"
-                                            >
-                                                {testingConnection ? (
-                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                ) : (
-                                                    <Link2 className="w-3.5 h-3.5" />
-                                                )}
-                                                Probar Conexión
-                                            </Button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Filename Nomenclature */}
-                                <div className="space-y-3 pt-2 border-t border-slate-100">
-                                    <div className="space-y-1.5">
-                                        <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                            Nomenclatura del Archivo de Audio
-                                        </Label>
-                                        <Input 
-                                            ref={recordingFilenameRef}
-                                            value={recordingFilenamePattern} 
-                                            onChange={(e) => setRecordingFilenamePattern(e.target.value)}
-                                            placeholder="{campaign_name}_{date}_{time}"
-                                            className="font-mono text-sm h-11 w-full bg-white shadow-sm"
-                                        />
-                                        <p className="text-[10px] text-slate-400">Define el patrón de nombres. Haz clic en las etiquetas para insertarlas.</p>
-                                    </div>
-
-                                    <div>
-                                        <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 block">Variables Disponibles (clic para insertar)</Label>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {[
-                                                { label: '{campaign_name}', desc: 'Nombre de la campaña' },
-                                                { label: '{date}', desc: 'Fecha (YYYY-MM-DD)' },
-                                                { label: '{time}', desc: 'Hora (HH-MM-SS)' },
-                                                ...(campaign.campaign_type !== 'INBOUND' ? [{ label: '{dst_number}', desc: 'Número de destino' }] : []),
-                                                ...(campaign.campaign_type === 'INBOUND' ? [{ label: '{src_number}', desc: 'Número de origen / Caller ID' }] : []),
-                                            ].map((variable) => (
-                                                <Badge 
-                                                    key={variable.label}
-                                                    variant="secondary"
-                                                    className="cursor-pointer hover:bg-red-100 border-red-200/50 text-red-700 font-mono text-xs transition-colors"
-                                                    title={variable.desc}
-                                                    onClick={() => {
-                                                        const input = recordingFilenameRef.current;
-                                                        if (!input) return;
-                                                        const start = input.selectionStart ?? recordingFilenamePattern.length;
-                                                        const newVal = recordingFilenamePattern.substring(0, start) + variable.label + recordingFilenamePattern.substring(start);
-                                                        setRecordingFilenamePattern(newVal);
-                                                        setTimeout(() => {
-                                                            const cursorPos = start + variable.label.length;
-                                                            input.focus();
-                                                            input.setSelectionRange(cursorPos, cursorPos);
-                                                        }, 0);
-                                                    }}
-                                                >
-                                                    {variable.label}
-                                                </Badge>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                                </>
-                                )}
-
-                                {/* Save Recording Button */}
-                                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                                    {recordingStorage === 'external' && !canSaveRecording ? (
-                                        <p className="text-xs text-amber-600 flex items-center gap-1 font-medium">
-                                            <XCircle className="w-3.5 h-3.5" />
-                                            Debes probar la conexión externa antes de guardar
-                                        </p>
-                                    ) : (
-                                        <span />
-                                    )}
-                                    <Button
-                                        onClick={handleSaveRecordingSettings}
-                                        disabled={savingRecording || !recordingEnabled || (recordingStorage === 'external' && !canSaveRecording)}
-                                        className="gap-2 min-w-[200px] h-11 rounded-xl shadow-lg shadow-red-500/10 text-sm bg-red-600 hover:bg-red-700"
-                                    >
-                                        {savingRecording ? (
-                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                        ) : (
-                                            <Save className="w-4 h-4" />
-                                        )}
-                                        {savingRecording ? "Guardando..." : "Guardar Grabación"}
-                                    </Button>
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                    </div>
+                    <CampaignSettingsTab
+                        campaign={campaign}
+                        dialLevel={dialLevel}
+                        setDialLevel={setDialLevel}
+                        selectedTrunkId={selectedTrunkId}
+                        setSelectedTrunkId={setSelectedTrunkId}
+                        availableTrunks={availableTrunks}
+                        cpsAvailability={cpsAvailability}
+                        predTargetDropRate={predTargetDropRate}
+                        setPredTargetDropRate={setPredTargetDropRate}
+                        predMinFactor={predMinFactor}
+                        setPredMinFactor={setPredMinFactor}
+                        predMaxFactor={predMaxFactor}
+                        setPredMaxFactor={setPredMaxFactor}
+                        maxRetries={maxRetries}
+                        setMaxRetries={setMaxRetries}
+                        retryGroups={retryGroups}
+                        setRetryGroups={setRetryGroups}
+                        scheduleTemplates={scheduleTemplates}
+                        scheduleTemplateId={scheduleTemplateId}
+                        setScheduleTemplateId={setScheduleTemplateId}
+                        loadingScheduleTemplates={loadingScheduleTemplates}
+                        savingScheduleTemplate={savingScheduleTemplate}
+                        scheduleTemplateDirty={scheduleTemplateDirty}
+                        onSaveScheduleTemplate={handleSaveScheduleTemplate}
+                        hasConfigChanges={hasConfigChanges}
+                        savingGeneral={savingGeneral}
+                        onSaveGeneralSettings={handleSaveGeneralSettings}
+                        recordingEnabled={recordingEnabled}
+                        setRecordingEnabled={setRecordingEnabled}
+                        recordingStorage={recordingStorage}
+                        setRecordingStorage={setRecordingStorage}
+                        recordingExternalType={recordingExternalType}
+                        setRecordingExternalType={setRecordingExternalType}
+                        recordingHost={recordingHost}
+                        setRecordingHost={setRecordingHost}
+                        recordingPort={recordingPort}
+                        setRecordingPort={setRecordingPort}
+                        recordingUsername={recordingUsername}
+                        setRecordingUsername={setRecordingUsername}
+                        recordingPassword={recordingPassword}
+                        setRecordingPassword={setRecordingPassword}
+                        recordingAccessKey={recordingAccessKey}
+                        setRecordingAccessKey={setRecordingAccessKey}
+                        recordingSecretKey={recordingSecretKey}
+                        setRecordingSecretKey={setRecordingSecretKey}
+                        recordingRegion={recordingRegion}
+                        setRecordingRegion={setRecordingRegion}
+                        recordingBucket={recordingBucket}
+                        setRecordingBucket={setRecordingBucket}
+                        recordingFilenamePattern={recordingFilenamePattern}
+                        setRecordingFilenamePattern={setRecordingFilenamePattern}
+                        recordingFilenameRef={recordingFilenameRef}
+                        isRecordingConnectionApproved={isRecordingConnectionApproved}
+                        canSaveRecording={canSaveRecording}
+                        testingConnection={testingConnection}
+                        savingRecording={savingRecording}
+                        onTestRecordingConnection={handleTestRecordingConnection}
+                        onSaveRecordingSettings={handleSaveRecordingSettings}
+                        invalidateRecordingApproved={() => setRecordingApprovedSnapshot(null)}
+                    />
                 </TabsContent >
 
                 {/* Tab: DIDs (INBOUND only) */}
@@ -3465,7 +2692,8 @@ export function CampaignDetailPage({
                     </div>
                 </TabsContent>
 
-                {/* Tab: TTS Templates */}
+                {/* Tab: TTS Templates — solo campañas BLASTER */}
+                {campaign.campaign_type === 'BLASTER' && (
                 <TabsContent value="tts_templates" forceMount className="flex-1 overflow-auto bg-white/60 backdrop-blur-md rounded-2xl border border-white/80 shadow-sm p-6 mt-0 data-[state=inactive]:hidden text-left relative z-0">
                     <div className="flex gap-6 h-full min-h-[500px]">
                         {/* Selected Template Form */}
@@ -3652,6 +2880,7 @@ export function CampaignDetailPage({
                         </div>
                     </div>
                 </TabsContent>
+                )}
             </div>
 
             {/* Global Right Sidebar */}

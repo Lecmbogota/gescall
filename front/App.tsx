@@ -11,8 +11,8 @@ import { Reports } from './components/Reports';
 import { AudioManager } from './components/AudioManager';
 import { BlacklistManager } from './components/BlacklistManager';
 
-import { ConsolidatedReports } from './components/ConsolidatedReports';
-import ScheduleCalendar from './components/ScheduleCalendar';
+import { ConsolidatedReportsHub } from './components/reports/ConsolidatedReportsHub';
+import ScheduleTemplates from './components/ScheduleTemplates';
 import { CampaignDetailPage } from './components/CampaignDetailPage';
 import { IvrFlowBuilder } from './components/IvrFlowBuilder';
 import { TrunksManager } from './components/TrunksManager';
@@ -188,10 +188,11 @@ export default function App() {
       case 'blacklist':
         return <BlacklistManager />;
 
-      case 'scheduler':
-        return <ScheduleCalendar />;
+      case 'schedule-templates':
+      case 'scheduler': // alias legacy: el id antiguo del menú apuntaba al programador
+        return <ScheduleTemplates />;
       case 'consolidated':
-        return <ConsolidatedReports />;
+        return <ConsolidatedReportsHub />;
       case 'trunks':
         return <TrunksManager />;
       case 'ivr-builder':

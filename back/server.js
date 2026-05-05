@@ -27,6 +27,7 @@ const audioRoutes = require('./routes/audio');
 const dncRoutes = require('./routes/dnc');
 const calleridPoolsRoutes = require('./routes/calleridPools');
 const schedulesRoutes = require('./routes/schedules');
+const scheduleTemplatesRoutes = require('./routes/scheduleTemplates');
 const ivrFlowsRoutes = require('./routes/ivrFlows');
 const trunksRoutes = require('./routes/trunks');
 const ticketsRoutes = require('./routes/tickets');
@@ -164,6 +165,7 @@ app.use('/api/audio', audioRoutes);
 app.use('/api/dnc', dncRoutes);
 app.use('/api/callerid-pools', calleridPoolsRoutes);
 app.use('/api/schedules', schedulesRoutes);
+app.use('/api/schedule-templates', scheduleTemplatesRoutes);
 app.use('/api/ivr-flows', ivrFlowsRoutes(pgDatabase));
 app.use('/api/trunks', trunksRoutes(pgDatabase));
 app.use('/api/users', usersRoutes);
@@ -175,6 +177,7 @@ app.use('/api/metrics', require('./routes/metrics'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/typifications', require('./routes/typifications'));
 app.use('/api/dispositions', require('./routes/dispositions'));
+app.use('/api/reports', require('./routes/reports'));
 
 app.get('/api/docs.json', async (req, res) => {
   try {

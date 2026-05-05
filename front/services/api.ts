@@ -316,6 +316,14 @@ class ApiService {
     });
   }
 
+  // Aggregated stats across multiple campaigns
+  async getConsolidatedStats(campaigns: string[], startDatetime: string, endDatetime: string) {
+    return this.request('/campaigns/consolidated-stats', {
+      method: 'POST',
+      body: JSON.stringify({ campaigns, startDatetime, endDatetime }),
+    });
+  }
+
   async getCampaignCallerIdSettings(campaignId: string) {
     return this.request(`/campaigns/${campaignId}/callerid-settings`);
   }
@@ -423,6 +431,58 @@ class ApiService {
     return this.request(`/campaigns/${campaignId}/dial-schedule`, {
       method: 'PUT',
       body: JSON.stringify({ dial_schedule: dialSchedule }),
+    });
+  }
+
+  async setCampaignScheduleTemplate(campaignId: string, templateId: number | null) {
+    return this.request(`/campaigns/${campaignId}/schedule-template`, {
+      method: 'PUT',
+      body: JSON.stringify({ schedule_template_id: templateId }),
+    });
+  }
+
+  // ─── Plantillas de horarios reutilizables ───
+  async listScheduleTemplates() {
+    return this.request('/schedule-templates');
+  }
+
+  async getScheduleTemplate(id: number) {
+    return this.request(`/schedule-templates/${id}`);
+  }
+
+  async getScheduleTemplateCampaigns(id: number) {
+    return this.request(`/schedule-templates/${id}/campaigns`);
+  }
+
+  async createScheduleTemplate(data: {
+    name: string;
+    description?: string | null;
+    timezone: string;
+    enabled: boolean;
+    windows: { days: number[]; start: string; end: string }[];
+  }) {
+    return this.request('/schedule-templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateScheduleTemplate(id: number, data: {
+    name?: string;
+    description?: string | null;
+    timezone?: string;
+    enabled?: boolean;
+    windows?: { days: number[]; start: string; end: string }[];
+  }) {
+    return this.request(`/schedule-templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteScheduleTemplate(id: number) {
+    return this.request(`/schedule-templates/${id}`, {
+      method: 'DELETE',
     });
   }
 
@@ -1271,6 +1331,101 @@ class ApiService {
     return this.request('/api/settings', {
       method: 'POST',
       body: JSON.stringify(settings),
+    });
+  }
+
+  // ── Reports module ───────────────────────────────────────────────────
+  async getReportColumnCatalog() {
+    return this.request('/reports/columns');
+  }
+
+  async listReportTemplates() {
+    return this.request('/reports/templates');
+  }
+
+  async getReportTemplate(id: number) {
+    return this.request(`/reports/templates/${id}`);
+  }
+
+  async createReportTemplate(payload: {
+    name: string;
+    description?: string;
+    scope: 'multi_campaign' | 'single_campaign';
+    definition: any;
+    is_shared?: boolean;
+  }) {
+    return this.request('/reports/templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateReportTemplate(id: number, payload: {
+    name?: string;
+    description?: string;
+    scope?: 'multi_campaign' | 'single_campaign';
+    definition?: any;
+    is_shared?: boolean;
+  }) {
+    return this.request(`/reports/templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteReportTemplate(id: number) {
+    return this.request(`/reports/templates/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async runReportAdHoc(payload: {
+    columns: string[];
+    filters?: Record<string, any>;
+    campaigns: string[];
+    startDatetime: string;
+    endDatetime: string;
+    sort?: { by: string; dir: 'asc' | 'desc' };
+    limit?: number;
+  }) {
+    return this.request('/reports/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async runReportTemplate(id: number, payload: {
+    startDatetime: string;
+    endDatetime: string;
+    campaigns?: string[];
+    limit?: number;
+  }) {
+    return this.request(`/reports/templates/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getDispositionSummary(payload: {
+    campaigns: string[];
+    startDatetime: string;
+    endDatetime: string;
+  }) {
+    return this.request('/reports/system/disposition-summary', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getTemporalDistribution(payload: {
+    campaigns: string[];
+    startDatetime: string;
+    endDatetime: string;
+    granularity?: 'hour' | 'hour_of_day' | 'day' | 'day_of_week';
+  }) {
+    return this.request('/reports/system/temporal-distribution', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

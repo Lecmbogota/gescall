@@ -81,8 +81,8 @@ const MENU_GROUPS: MenuGroup[] = [
         requiredPermission: "view_campaigns",
       },
       {
-        id: "scheduler",
-        label: "Programador",
+        id: "schedule-templates",
+        label: "Horarios",
         icon: Calendar,
         shortcut: "Alt+P",
         shortcutKey: "p",
@@ -98,7 +98,7 @@ const MENU_GROUPS: MenuGroup[] = [
       },
       {
         id: "consolidated",
-        label: "Consolidados",
+        label: "Reportes",
         icon: FileBarChart2,
         shortcut: "Alt+R",
         shortcutKey: "r",

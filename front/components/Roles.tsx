@@ -33,7 +33,16 @@ const PERMISSION_CATEGORIES = [
         label: 'Core & Dashboard',
         permissions: [
             { id: 'view_dashboard', label: 'Ver Panel Principal', desc: 'Acceso a la vista de inicio y métricas rápidas' },
-            { id: 'view_reports', label: 'Ver Reportes', desc: 'Permiso para acceder a tablas de reportes y exportar datos' },
+        ]
+    },
+    {
+        id: 'reports',
+        label: 'Reportes',
+        permissions: [
+            { id: 'view_reports', label: 'Ver Reportes', desc: 'Acceso al área de reportes (sistema y personalizados) y a su exportación' },
+            { id: 'create_custom_reports', label: 'Crear Reportes Personalizados', desc: 'Permite guardar plantillas de reportes con nombre reutilizable' },
+            { id: 'edit_custom_reports', label: 'Editar Reportes Personalizados', desc: 'Permite modificar plantillas (propias; los administradores pueden editar todas)' },
+            { id: 'delete_custom_reports', label: 'Eliminar Reportes Personalizados', desc: 'Permite eliminar plantillas (propias; los administradores pueden eliminar todas)' },
         ]
     },
     {
@@ -48,7 +57,7 @@ const PERMISSION_CATEGORIES = [
             { id: 'manage_trunks', label: 'Gestionar Troncales', desc: 'Permite modificar configuración SIP de troncales' },
             { id: 'manage_blacklist', label: 'Gestionar Blacklist', desc: 'Permite la gestión de números bloqueados (DNC)' },
             { id: 'manage_tts_nodes', label: 'Gestión de Nodos TTS', desc: 'Permite configurar y administrar los nodos de Text-to-Speech' },
-            { id: 'manage_schedules', label: 'Programador', desc: 'Permite programar activaciones/pausas automatizadas' },
+            { id: 'manage_schedules', label: 'Horarios', desc: 'Permite crear y asignar horarios reutilizables a las campañas' },
         ]
     },
     {

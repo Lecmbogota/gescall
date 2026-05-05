@@ -66,6 +66,7 @@ interface Campaign {
     timezone?: string;
     windows?: { days?: number[]; start?: string; end?: string }[];
   };
+  scheduleTemplateId?: number | null;
 }
 
 interface CampaignsProps {
@@ -195,6 +196,7 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 moh_class: camp.moh_class || null,
                 moh_custom_file: camp.moh_custom_file || null,
                 dialSchedule: camp.dial_schedule || undefined,
+                scheduleTemplateId: camp.schedule_template_id ?? null,
               };
             } catch (err) {
               console.error(`[Campaigns] Error fetching progress for ${camp.campaign_id}:`, err);
@@ -452,6 +454,11 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                     <SelectItem value="BLASTER">Blaster</SelectItem>
                   </SelectContent>
                 </Select>
+                {createForm.campaign_type === 'BLASTER' && (
+                  <p className="mt-2 text-xs text-slate-600 leading-relaxed bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                    El modo Blaster disca hacia el IVR de forma automática; <strong>no requiere agentes asignados</strong> a la campaña.
+                  </p>
+                )}
               </div>
 
               {createForm.campaign_type === 'OUTBOUND_PREDICTIVE' && (

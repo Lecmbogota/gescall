@@ -1,62 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const pg = require('../config/pgDatabase');
+const { matchDispositionConditions, fallbackDisposition } = require('../utils/dispositionUtils');
 
-// ─── Condition matching ────────────────────────────────────────────
-
-/**
- * Evaluate whether a disposition's conditions match a call record.
- * Returns true if all conditions are satisfied.
- */
-function matchConditions(record, conditions) {
-    if (!conditions || Object.keys(conditions).length === 0) return true;
-
-    const cs = (record.call_status || '').toUpperCase();
-    const ls = (record.lead_status || '').toUpperCase();
-    const dtmf = record.dtmf_pressed || '';
-    const duration = parseInt(record.length_in_sec || record.call_duration || '0');
-
-    // call_status and lead_status are OR'd: match if EITHER condition matches
-    let hasStatusCondition = false;
-    let statusMatched = false;
-
-    if (conditions.call_status && Array.isArray(conditions.call_status) && conditions.call_status.length > 0) {
-        hasStatusCondition = true;
-        if (conditions.call_status.includes(cs)) statusMatched = true;
-    }
-    if (conditions.lead_status && Array.isArray(conditions.lead_status) && conditions.lead_status.length > 0) {
-        hasStatusCondition = true;
-        if (conditions.lead_status.includes(ls)) statusMatched = true;
-    }
-    if (hasStatusCondition && !statusMatched) return false;
-
-    // dtmf, exclude_typification, require_typification, min_duration are AND conditions
-    if (conditions.dtmf && Array.isArray(conditions.dtmf) && conditions.dtmf.length > 0) {
-        if (!conditions.dtmf.includes(dtmf)) return false;
-    }
-    if (conditions.exclude_typification === true) {
-        if (record.typification_name) return false;
-    }
-    if (conditions.require_typification === true) {
-        if (!record.typification_name) return false;
-    }
-    if (typeof conditions.min_duration === 'number') {
-        if (duration < conditions.min_duration) return false;
-    }
-
-    return true;
-}
+// Alias para compatibilidad con consumidores antiguos del módulo.
+const matchConditions = matchDispositionConditions;
 
 /**
- * Find the disposition that matches a given call record for a campaign.
- * Evaluates in sort_order; returns the first matching label, or "Desconocido".
- * This is the DB-backed replacement for the hardcoded getDisposition().
+ * Devuelve la disposition que coincide con el registro para la campaña.
+ * Si ninguna disposition personalizada coincide, aplica el fallback estándar
+ * (utils/dispositionUtils.js) — nunca "Desconocido" como salida sistemática.
  */
 async function getDispositionForRecord(record, campaignId) {
     try {
         const { rows } = await pg.query(
-            `SELECT id, code, label, color, conditions FROM gescall_dispositions 
-             WHERE campaign_id = $1 AND active = true 
+            `SELECT id, code, label, color, conditions FROM gescall_dispositions
+             WHERE campaign_id = $1 AND active = true
              ORDER BY sort_order ASC`,
             [campaignId]
         );
@@ -65,17 +24,15 @@ async function getDispositionForRecord(record, campaignId) {
             const conditions = typeof dispo.conditions === 'string'
                 ? JSON.parse(dispo.conditions)
                 : dispo.conditions;
-
             if (matchConditions(record, conditions)) {
                 return { label: dispo.label, code: dispo.code, color: dispo.color };
             }
         }
-
-        return { label: 'Desconocido', code: 'DESCONOCIDO', color: 'bg-slate-400' };
     } catch (err) {
         console.error('[dispositions] Error evaluating:', err.message);
-        return { label: 'Desconocido', code: 'DESCONOCIDO', color: 'bg-slate-400' };
     }
+    const label = fallbackDisposition(record);
+    return { label, code: label.toUpperCase().replace(/\s+/g, '_'), color: 'bg-slate-400' };
 }
 
 // ─── Routes ─────────────────────────────────────────────────────────

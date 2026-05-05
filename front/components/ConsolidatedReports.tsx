@@ -27,6 +27,7 @@ import {
     X,
     Loader2,
     Play,
+    ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
 import { DateRangePicker } from "react-date-range";
@@ -64,7 +65,11 @@ const getDisplayStatus = (record: CallRecord): { label: string; color: string } 
 
 type ExportFormat = "csv" | "excel" | "pdf";
 
-export function ConsolidatedReports() {
+interface ConsolidatedReportsProps {
+    onBack?: () => void;
+}
+
+export function ConsolidatedReports({ onBack }: ConsolidatedReportsProps = {}) {
     const { getCampaignIds, isAdmin } = useAuthStore();
     const timezone = useSettingsStore((state) => state.timezone);
     const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
@@ -368,11 +373,16 @@ export function ConsolidatedReports() {
             {/* ── Header Bar ── */}
             <div className="flex-shrink-0 flex items-center justify-between px-1 pb-3">
                 <div className="flex items-center gap-2.5">
+                    {onBack && (
+                        <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 gap-1">
+                            <ArrowLeft className="w-4 h-4" /> Volver
+                        </Button>
+                    )}
                     <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-sm">
                         <FileBarChart2 className="w-4 h-4 text-white" />
                     </div>
                     <div>
-                        <h1 className="text-lg font-semibold text-slate-900 leading-tight">Reportes Consolidados</h1>
+                        <h1 className="text-lg font-semibold text-slate-900 leading-tight">Detalle consolidado de llamadas</h1>
                         <p className="text-xs text-slate-400">Múltiples campañas · Exporta CSV, Excel o PDF</p>
                     </div>
                 </div>

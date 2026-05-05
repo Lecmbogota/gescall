@@ -4,6 +4,7 @@ const router = express.Router();
 const pg = require('../config/pgDatabase');
 const redis = require('../config/redisClient');
 const pgDatabaseService = require('../services/pgDatabaseService');
+const { resolveDisposition, matchDispositionConditions: matchConds } = require('../utils/dispositionUtils');
 
 // ─── Disposition Cache (in-memory, TTL 5 min) ──────────────────────
 const dispositionCache = new Map(); // campaignId -> { fetchedAt, rows }
@@ -276,7 +277,8 @@ router.get('/:campaign_id/stats', async (req, res) => {
                 predictive_target_drop_rate: parseFloat(campQuery.rows[0].predictive_target_drop_rate) || 0.03,
                 predictive_min_factor: parseFloat(campQuery.rows[0].predictive_min_factor) || 1.0,
                 predictive_max_factor: parseFloat(campQuery.rows[0].predictive_max_factor) || 4.0,
-                dial_schedule: campQuery.rows[0].dial_schedule || null
+                dial_schedule: campQuery.rows[0].dial_schedule || null,
+                schedule_template_id: campQuery.rows[0].schedule_template_id || null
             }
         });
     } catch (error) {
@@ -340,43 +342,13 @@ router.post('/:campaign_id/call-log', async (req, res) => {
 
         const { rows } = await pg.query(query, params);
 
-        // Compute disposition for each row using cached campaign dispositions
+        // Disposition normalizada (helper único): primero dispositions de la campaña;
+        // si ninguna coincide, fallback estándar para que NUNCA se pierda como "Desconocido".
         const dispositions = await getCampaignDispositionsCached(campaign_id);
-        const dataWithDisposition = rows.map(record => {
-            let disposition = 'Desconocido';
-            for (const dispo of dispositions) {
-                if (matchDispositionConditions(record, dispo.conditions)) {
-                    disposition = dispo.label;
-                    break;
-                }
-            }
-            // Fallback to hardcoded if no DB dispositions configured
-            if (disposition === 'Desconocido' && dispositions.length === 0) {
-                const cs = (record.call_status || '').toUpperCase();
-                const ls = (record.lead_status || '').toUpperCase();
-                const dtmf = record.dtmf_pressed || '';
-                if (record.typification_name) disposition = 'Contestada';
-                else if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') disposition = 'Transferido';
-                else if (cs === 'COMPLET') disposition = 'Completado';
-                else if (cs === 'HANGUP') disposition = 'Rechazada';
-                else if (cs === 'ANSWER' || cs === 'UP') {
-                    if (dtmf === 'TIMEOUT') disposition = 'Contestada';
-                    else if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') disposition = 'Rechazada';
-                    else disposition = 'Contestada';
-                }
-                else if (cs === 'FAILED') disposition = 'Fallida';
-                else if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) disposition = 'No Contesta';
-                else if (['B','BUSY','CONGESTION','AB'].includes(cs)) disposition = 'Ocupado';
-                else if (['DROP','PDROP','XDROP'].includes(cs)) disposition = 'Cortada';
-                else if (['DNC','DNCC'].includes(cs)) disposition = 'No Llamar';
-                else if (['AM','AL'].includes(cs)) disposition = 'Buzón';
-                else if (['SALE'].includes(cs)) disposition = 'Venta';
-                else if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) disposition = 'Contestada';
-                else if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) disposition = 'No Contesta';
-                else disposition = cs || ls || 'Desconocido';
-            }
-            return { ...record, disposition };
-        });
+        const dataWithDisposition = rows.map(record => ({
+            ...record,
+            disposition: resolveDisposition(record, dispositions)
+        }));
 
         res.json({ success: true, data: dataWithDisposition });
     } catch (error) {
@@ -503,6 +475,20 @@ router.put('/:campaign_id/tts_templates', async (req, res) => {
 
         if (!Array.isArray(templates)) {
             return res.status(400).json({ success: false, error: 'templates debe ser un array' });
+        }
+
+        const typeRes = await pg.query(
+            'SELECT campaign_type FROM gescall_campaigns WHERE campaign_id = $1',
+            [campaign_id]
+        );
+        if (typeRes.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+        if (typeRes.rows[0].campaign_type !== 'BLASTER') {
+            return res.status(400).json({
+                success: false,
+                error: 'Las plantillas TTS solo se pueden editar en campañas tipo BLASTER',
+            });
         }
 
         console.log(`[pg_campaigns] Updating campaign ${campaign_id} TTS templates`);
@@ -651,6 +637,72 @@ router.put('/:campaign_id/retry-settings', async (req, res) => {
 });
 
 // ==================== HORARIO DE DISCADO ====================
+
+// Asigna (o desasigna con null) una plantilla de horario reutilizable a la campaña.
+// Al asignar, copia el contenido del template a `dial_schedule` (que es lo único
+// que el dialer Go consulta). Al desasignar, mantiene el último `dial_schedule`
+// para que el operador decida si lo limpia.
+router.put('/:campaign_id/schedule-template', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const raw = req.body?.schedule_template_id;
+        const templateId = raw === null || raw === undefined || raw === '' ? null : parseInt(raw, 10);
+
+        if (templateId !== null && (!Number.isInteger(templateId) || templateId <= 0)) {
+            return res.status(400).json({ success: false, error: 'schedule_template_id inválido' });
+        }
+
+        let templateRow = null;
+        if (templateId !== null) {
+            const { rows: tplRows } = await pg.query(
+                'SELECT id, enabled, timezone, windows FROM gescall_schedule_templates WHERE id = $1',
+                [templateId]
+            );
+            if (!tplRows.length) {
+                return res.status(404).json({ success: false, error: 'Plantilla de horario no encontrada' });
+            }
+            templateRow = tplRows[0];
+        }
+
+        let rows;
+        if (templateRow) {
+            const dialSchedule = {
+                enabled: !!templateRow.enabled,
+                timezone:
+                    typeof templateRow.timezone === 'string' && templateRow.timezone.trim()
+                        ? templateRow.timezone.trim()
+                        : 'America/Mexico_City',
+                windows: Array.isArray(templateRow.windows) ? templateRow.windows : [],
+            };
+            const result = await pg.query(
+                `UPDATE gescall_campaigns
+                    SET schedule_template_id = $1, dial_schedule = $2::jsonb
+                  WHERE campaign_id = $3
+                  RETURNING campaign_id, schedule_template_id, dial_schedule`,
+                [templateId, JSON.stringify(dialSchedule), campaign_id]
+            );
+            rows = result.rows;
+        } else {
+            const result = await pg.query(
+                `UPDATE gescall_campaigns
+                    SET schedule_template_id = NULL
+                  WHERE campaign_id = $1
+                  RETURNING campaign_id, schedule_template_id, dial_schedule`,
+                [campaign_id]
+            );
+            rows = result.rows;
+        }
+
+        if (!rows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+
+        res.json({ success: true, data: rows[0] });
+    } catch (error) {
+        console.error('[pg_campaigns] schedule-template error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 router.put('/:campaign_id/dial-schedule', async (req, res) => {
     try {
@@ -1408,90 +1460,22 @@ const translateHangupCause = (cause) => {
     return map[c] || `Causa de colgado: ${c}`;
 };
 
-// Condition matching for disposition evaluation (used by export-report + call-log)
-const matchDispositionConditions = (record, conditions) => {
-    if (!conditions || Object.keys(conditions).length === 0) return true;
-    const cs = (record.call_status || '').toUpperCase();
-    const ls = (record.lead_status || '').toUpperCase();
-    const dtmf = record.dtmf_pressed || '';
-    const duration = parseInt(record.length_in_sec || record.call_duration || '0');
+// matchDispositionConditions y resolveDisposition viven en utils/dispositionUtils.js (helper único).
+// Re-export local para no romper referencias antiguas dentro de este módulo:
+const matchDispositionConditions = matchConds;
 
-    // call_status and lead_status are OR'd: match if EITHER condition matches
-    let hasStatusCondition = false;
-    let statusMatched = false;
-
-    if (conditions.call_status && Array.isArray(conditions.call_status) && conditions.call_status.length > 0) {
-        hasStatusCondition = true;
-        if (conditions.call_status.includes(cs)) statusMatched = true;
-    }
-    if (conditions.lead_status && Array.isArray(conditions.lead_status) && conditions.lead_status.length > 0) {
-        hasStatusCondition = true;
-        if (conditions.lead_status.includes(ls)) statusMatched = true;
-    }
-    if (hasStatusCondition && !statusMatched) return false;
-
-    // dtmf, exclude_typification, require_typification, min_duration are AND conditions
-    if (conditions.dtmf && Array.isArray(conditions.dtmf) && conditions.dtmf.length > 0) {
-        if (!conditions.dtmf.includes(dtmf)) return false;
-    }
-    if (conditions.exclude_typification === true) {
-        if (record.typification_name) return false;
-    }
-    if (conditions.require_typification === true) {
-        if (!record.typification_name) return false;
-    }
-    if (typeof conditions.min_duration === 'number') {
-        if (duration < conditions.min_duration) return false;
-    }
-    return true;
-};
-
-/**
- * Get disposition for a call record using campaign dispositions from DB.
- * Falls back to hardcoded logic if no dispositions configured.
- */
 const getDisposition = async (record, campaignId) => {
+    let dispositions = [];
     try {
-        const { rows: dispositions } = await pg.query(
-            `SELECT label, conditions FROM gescall_dispositions 
-             WHERE campaign_id = $1 AND active = true 
+        const { rows } = await pg.query(
+            `SELECT label, conditions FROM gescall_dispositions
+             WHERE campaign_id = $1 AND active = true
              ORDER BY sort_order ASC`,
             [campaignId]
         );
-        if (dispositions.length > 0) {
-            for (const dispo of dispositions) {
-                const conds = typeof dispo.conditions === 'string' ? JSON.parse(dispo.conditions) : dispo.conditions;
-                if (matchDispositionConditions(record, conds)) {
-                    return dispo.label;
-                }
-            }
-        }
-    } catch (e) {
-        // DB query failed — fall through to hardcoded
-    }
-    // Hardcoded fallback
-    const cs = (record.call_status || '').toUpperCase();
-    const ls = (record.lead_status || '').toUpperCase();
-    const dtmf = record.dtmf_pressed || '';
-    if (record.typification_name) return 'Contestada';
-    if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') return 'Transferido';
-    if (cs === 'COMPLET') return 'Completado';
-    if (cs === 'HANGUP') return 'Rechazada';
-    if (cs === 'ANSWER' || cs === 'UP') {
-        if (dtmf === 'TIMEOUT') return 'Contestada';
-        if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') return 'Rechazada';
-        return 'Contestada';
-    }
-    if (cs === 'FAILED') return 'Fallida';
-    if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) return 'No Contesta';
-    if (['B','BUSY','CONGESTION','AB'].includes(cs)) return 'Ocupado';
-    if (['DROP','PDROP','XDROP'].includes(cs)) return 'Cortada';
-    if (['DNC','DNCC'].includes(cs)) return 'No Llamar';
-    if (['AM','AL'].includes(cs)) return 'Buzón';
-    if (['SALE'].includes(cs)) return 'Venta';
-    if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) return 'Contestada';
-    if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) return 'No Contesta';
-    return cs || ls || 'Desconocido';
+        dispositions = rows;
+    } catch (_) { /* fall through al fallback estándar */ }
+    return resolveDisposition(record, dispositions);
 };
 
 router.post('/:campaign_id/export-report', async (req, res) => {
@@ -1537,40 +1521,9 @@ router.post('/:campaign_id/export-report', async (req, res) => {
             ? visibleColumns
             : ['sys_hora', 'sys_fecha', 'sys_disposicion', 'sys_estado', 'sys_duracion', 'sys_telefono', 'sys_dtmf', 'sys_lista', 'sys_desc', 'sys_callerid', 'sys_quien_colgo'];
 
-        // Fetch campaign dispositions once (cached) for efficient matching
+        // Disposition por registro vía helper único (utils/dispositionUtils.js).
         const dispositionsMemo = await getCampaignDispositionsCached(campaign_id);
-
-        const getDispositionLocal = (record) => {
-            // DB-backed matching
-            for (const dispo of dispositionsMemo) {
-                if (matchDispositionConditions(record, dispo.conditions)) {
-                    return dispo.label;
-                }
-            }
-            // Hardcoded fallback
-            const cs = (record.call_status || '').toUpperCase();
-            const ls = (record.lead_status || '').toUpperCase();
-            const dtmf = record.dtmf_pressed || '';
-            if (record.typification_name) return 'Contestada';
-            if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') return 'Transferido';
-            if (cs === 'COMPLET') return 'Completado';
-            if (cs === 'HANGUP') return 'Rechazada';
-            if (cs === 'ANSWER' || cs === 'UP') {
-                if (dtmf === 'TIMEOUT') return 'Contestada';
-                if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') return 'Rechazada';
-                return 'Contestada';
-            }
-            if (cs === 'FAILED') return 'Fallida';
-            if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) return 'No Contesta';
-            if (['B','BUSY','CONGESTION','AB'].includes(cs)) return 'Ocupado';
-            if (['DROP','PDROP','XDROP'].includes(cs)) return 'Cortada';
-            if (['DNC','DNCC'].includes(cs)) return 'No Llamar';
-            if (['AM','AL'].includes(cs)) return 'Buzón';
-            if (['SALE'].includes(cs)) return 'Venta';
-            if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) return 'Contestada';
-            if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) return 'No Contesta';
-            return cs || ls || 'Desconocido';
-        };
+        const getDispositionLocal = (record) => resolveDisposition(record, dispositionsMemo);
 
         const headers = columns.map(col => {
             const map = { sys_hora: 'Hora', sys_fecha: 'Fecha', sys_estado: 'Estado (Tipificación)', sys_disposicion: 'Disposición', sys_duracion: 'Duración',
