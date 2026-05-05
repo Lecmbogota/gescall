@@ -74,8 +74,6 @@ import 'react-date-range/dist/theme/default.css';
 import { CampaignCallerIdSettings } from './CampaignCallerIdSettings';
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { CallerIDPoolsManager } from './CallerIDPoolsManager';
-import { InboundDidsManager } from './InboundDidsManager';
-
 interface Campaign {
   id: string;
   name: string;
@@ -88,8 +86,8 @@ interface Campaign {
   lastActivity: string;
   autoDialLevel?: string;
   maxRetries?: number;
+  workspaceDailyTarget?: number;
   campaign_type?: string;
-  trunk_id?: string | null;
   predictive_target_drop_rate?: number;
   predictive_min_factor?: number;
   predictive_max_factor?: number;
@@ -126,10 +124,8 @@ export function CampaignDetailsModal({
   const [isToggling, setIsToggling] = useState(false);
   const [dialLevel, setDialLevel] = useState(campaign.autoDialLevel || "1.0");
   const [maxRetries, setMaxRetries] = useState<number>(campaign.maxRetries ?? 3);
+  const [workspaceDailyTarget, setWorkspaceDailyTarget] = useState<number>(campaign.workspaceDailyTarget ?? 20);
   const [savingGeneral, setSavingGeneral] = useState(false);
-  const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
-  const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
-
   // Predictive state
   const [predTargetDropRate, setPredTargetDropRate] = useState(campaign.predictive_target_drop_rate ?? 0.03);
   const [predMinFactor, setPredMinFactor] = useState(campaign.predictive_min_factor ?? 1.0);
@@ -140,22 +136,11 @@ export function CampaignDetailsModal({
     setCampaignStatus(campaign.status);
     setDialLevel(campaign.autoDialLevel || "1.0");
     setMaxRetries(campaign.maxRetries ?? 3);
-    setSelectedTrunkId(campaign.trunk_id || '__none__');
+    setWorkspaceDailyTarget(campaign.workspaceDailyTarget ?? 20);
     if (campaign.predictive_target_drop_rate !== undefined) setPredTargetDropRate(campaign.predictive_target_drop_rate);
     if (campaign.predictive_min_factor !== undefined) setPredMinFactor(campaign.predictive_min_factor);
     if (campaign.predictive_max_factor !== undefined) setPredMaxFactor(campaign.predictive_max_factor);
-  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, isOpen]);
-
-  // Fetch trunks list once
-  useEffect(() => {
-    if (isOpen) {
-      api.getTrunks().then((resp: any) => {
-        if (Array.isArray(resp)) {
-          setAvailableTrunks(resp);
-        }
-      }).catch(() => {});
-    }
-  }, [isOpen]);
+  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.workspaceDailyTarget, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, isOpen]);
 
   const handleSaveGeneralSettings = async () => {
     setSavingGeneral(true);
@@ -163,7 +148,7 @@ export function CampaignDetailsModal({
       await Promise.all([
         api.updateCampaignDialLevel(campaign.id, dialLevel),
         api.updateCampaignRetries(campaign.id, maxRetries),
-        api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId),
+        api.updateCampaignWorkspaceDailyTarget(campaign.id, workspaceDailyTarget),
         ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
           api.updateCampaignPredictive(campaign.id, {
             predictive_target_drop_rate: predTargetDropRate,
@@ -744,12 +729,6 @@ export function CampaignDetailsModal({
                   <Settings className="w-4 h-4" />
                   Ajustes
                 </TabsTrigger>
-                {campaign.campaign_type === 'INBOUND' && (
-                  <TabsTrigger value="dids" className="gap-2">
-                    <Phone className="w-4 h-4" />
-                    DIDs Inbound
-                  </TabsTrigger>
-                )}
               </TabsList>
             </div>
 
@@ -1250,7 +1229,7 @@ export function CampaignDetailsModal({
                         <Settings className="w-4 h-4 text-blue-600" />
                         <div>
                           <CardTitle className="text-sm font-semibold">Ajustes de Campaña</CardTitle>
-                          <CardDescription className="text-[11px]">Marcación, troncal y reintentos</CardDescription>
+                          <CardDescription className="text-[11px]">Marcación y reintentos (troncal saliente: Enrutamiento)</CardDescription>
                         </div>
                       </div>
                     </CardHeader>
@@ -1266,22 +1245,6 @@ export function CampaignDetailsModal({
                               {[1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0].map((ratio) => (
                                 <SelectItem key={ratio} value={ratio.toFixed(1)}>
                                   {ratio.toFixed(2).replace('.', ',')}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor="trunkSelectModal" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider w-14 shrink-0 text-right">Troncal</Label>
-                          <Select value={selectedTrunkId} onValueChange={setSelectedTrunkId}>
-                            <SelectTrigger id="trunkSelectModal" className="font-mono text-sm h-8 w-44 bg-white">
-                              <SelectValue placeholder="Sin troncal" />
-                            </SelectTrigger>
-                            <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                              <SelectItem value="__none__">Sin asignar (default .env)</SelectItem>
-                              {availableTrunks.map((trunk: any) => (
-                                <SelectItem key={trunk.trunk_id} value={trunk.trunk_id}>
-                                  {trunk.trunk_name} ({trunk.trunk_id})
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1366,6 +1329,28 @@ export function CampaignDetailsModal({
 
                       <div className="border-t border-slate-100" />
 
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500" />
+                          <span className="text-xs font-semibold text-slate-700">Meta diaria workspace</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="workspaceDailyTargetModal" className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-0">Objetivo</Label>
+                          <Input
+                            id="workspaceDailyTargetModal"
+                            type="number"
+                            min="1"
+                            max="100000"
+                            value={workspaceDailyTarget}
+                            onChange={(e) => setWorkspaceDailyTarget(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            placeholder="20"
+                            className="font-mono text-xs w-20 h-7 text-center"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-100" />
+
                       <div>
                         <button
                           onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
@@ -1387,7 +1372,11 @@ export function CampaignDetailsModal({
                       <div className="flex items-center justify-end pt-2 border-t border-slate-100">
                         <Button
                           onClick={handleSaveGeneralSettings}
-                          disabled={savingGeneral || (dialLevel === campaign.autoDialLevel && maxRetries === (campaign.maxRetries ?? 3))}
+                          disabled={savingGeneral || (
+                            dialLevel === campaign.autoDialLevel &&
+                            maxRetries === (campaign.maxRetries ?? 3) &&
+                            workspaceDailyTarget === (campaign.workspaceDailyTarget ?? 20)
+                          )}
                           className="gap-1.5 h-8 rounded-lg shadow-sm text-xs"
                         >
                           {savingGeneral ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
@@ -1398,11 +1387,6 @@ export function CampaignDetailsModal({
                   </Card>
                 </TabsContent>
 
-                {campaign.campaign_type === 'INBOUND' && (
-                  <TabsContent value="dids" className="mt-4">
-                    <InboundDidsManager campaignId={campaign.id} />
-                  </TabsContent>
-                )}
               </div>
             </ScrollArea>
           </Tabs>

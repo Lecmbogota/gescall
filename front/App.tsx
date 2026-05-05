@@ -8,7 +8,6 @@ import { DashboardLayout } from './components/DashboardLayout';
 import { Campaigns } from './components/Campaigns';
 import { Agents } from './components/Agents';
 import { Reports } from './components/Reports';
-import { AudioManager } from './components/AudioManager';
 import { BlacklistManager } from './components/BlacklistManager';
 
 import { ConsolidatedReportsHub } from './components/reports/ConsolidatedReportsHub';
@@ -16,15 +15,18 @@ import ScheduleTemplates from './components/ScheduleTemplates';
 import { CampaignDetailPage } from './components/CampaignDetailPage';
 import { IvrFlowBuilder } from './components/IvrFlowBuilder';
 import { TrunksManager } from './components/TrunksManager';
+import { RouteRulesManager } from './components/RouteRulesManager';
 import { Users } from './components/Users';
 import { Roles } from './components/Roles';
 import { TTSNodesManager } from './components/TTSNodesManager';
 import { Settings } from './components/Settings';
 import SwaggerDocs from './components/SwaggerDocs';
+import { CallerIDPoolsManager } from './components/CallerIDPoolsManager';
 import { Toaster } from './components/ui/sonner';
-import { useAuthStore } from './stores/authStore';
+import { useAuthStore, type AuthSession } from './stores/authStore';
 import authService from './services/authService';
 import { AgentWorkspace } from './components/AgentWorkspace';
+import { AgentWorkspaceAdmin } from './components/AgentWorkspaceAdmin';
 import socketService from './services/socket';
 
 // Campaign type for navigation
@@ -40,13 +42,30 @@ interface Campaign {
   lastActivity: string;
 }
 
+/** Menús retirados: limpia favorito guardado para no abrir una vista huérfana. */
+function getValidFavoriteMenuId(): string | null {
+  const raw = localStorage.getItem('favoriteMenu');
+  if (raw === 'audio') {
+    localStorage.removeItem('favoriteMenu');
+    return null;
+  }
+  return raw;
+}
+
+/** Alineado con el API supervisor (admin, manage_agent_workspace, is_system). */
+function canAccessAgentWorkspaceAdmin(session: AuthSession | null): boolean {
+  if (!session?.user) return false;
+  if (session.user.is_system === true) return true;
+  const granted = session.permissions?.granted ?? [];
+  return granted.includes('manage_agent_workspace') || granted.includes('admin');
+}
+
 export default function App() {
   const { isAuthenticated, session, logout: logoutStore, getUserLevel } = useAuthStore();
   const [username, setUsername] = useState('');
   const [currentPage, setCurrentPage] = useState(() => {
     // Initialize with favorite or default to 'campaigns'
-    const savedFavorite = localStorage.getItem('favoriteMenu');
-    return savedFavorite || 'campaigns';
+    return getValidFavoriteMenuId() || 'campaigns';
   });
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
 
@@ -56,21 +75,37 @@ export default function App() {
       console.log('[App] Restored session for user:', session.agent_user);
       setUsername(session.agent_user);
 
-      // Load favorite menu from localStorage
-      const savedFavorite = localStorage.getItem('favoriteMenu');
+      const savedFavorite = getValidFavoriteMenuId();
       if (savedFavorite) {
-        setCurrentPage(savedFavorite);
+        if (savedFavorite === 'agent-workspace-admin' && !canAccessAgentWorkspaceAdmin(session)) {
+          localStorage.removeItem('favoriteMenu');
+          setCurrentPage('campaigns');
+        } else {
+          setCurrentPage(savedFavorite);
+        }
       }
     }
   }, [isAuthenticated, session]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !session) return;
+    if (currentPage === 'agent-workspace-admin' && !canAccessAgentWorkspaceAdmin(session)) {
+      setCurrentPage('campaigns');
+    }
+  }, [isAuthenticated, session, currentPage]);
+
   const handleLogin = (user: string) => {
     setUsername(user);
 
-    // Load favorite menu from localStorage
-    const savedFavorite = localStorage.getItem('favoriteMenu');
+    const savedFavorite = getValidFavoriteMenuId();
     if (savedFavorite) {
-      setCurrentPage(savedFavorite);
+      const s = useAuthStore.getState().session;
+      if (savedFavorite === 'agent-workspace-admin' && !canAccessAgentWorkspaceAdmin(s)) {
+        localStorage.removeItem('favoriteMenu');
+        setCurrentPage('campaigns');
+      } else {
+        setCurrentPage(savedFavorite);
+      }
     }
   };
 
@@ -99,8 +134,7 @@ export default function App() {
     setUsername('');
 
     // Don't reset currentPage to preserve favorite for next login
-    const savedFavorite = localStorage.getItem('favoriteMenu');
-    setCurrentPage(savedFavorite || 'campaigns');
+    setCurrentPage(getValidFavoriteMenuId() || 'campaigns');
   };
 
   const handleNavigate = (menuId: string, campaign?: Campaign) => {
@@ -183,10 +217,11 @@ export default function App() {
       case 'reports-agents':
       case 'reports-campaigns':
         return <Reports username={username} />;
-      case 'audio':
-        return <AudioManager />;
       case 'blacklist':
         return <BlacklistManager />;
+
+      case 'callerid-pools':
+        return <CallerIDPoolsManager />;
 
       case 'schedule-templates':
       case 'scheduler': // alias legacy: el id antiguo del menú apuntaba al programador
@@ -195,6 +230,8 @@ export default function App() {
         return <ConsolidatedReportsHub />;
       case 'trunks':
         return <TrunksManager />;
+      case 'routing-rules':
+        return <RouteRulesManager />;
       case 'ivr-builder':
         return <IvrFlowBuilder />;
       case 'users':
@@ -205,6 +242,25 @@ export default function App() {
         return <TTSNodesManager />;
       case 'settings':
         return <Settings />;
+      case 'agent-workspace-admin':
+        if (!canAccessAgentWorkspaceAdmin(session)) {
+          return (
+            <div className="flex flex-col h-full p-6 items-center justify-center gap-4 animate-in fade-in duration-300">
+              <p className="text-slate-500 text-center max-w-md">
+                No tienes permiso para administrar el workspace de agentes (avisos y callbacks).
+                Si lo necesitas, pide que te asignen el permiso correspondiente en Roles.
+              </p>
+              <button
+                type="button"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                onClick={() => handleNavigate('campaigns')}
+              >
+                Ir a campañas
+              </button>
+            </div>
+          );
+        }
+        return <AgentWorkspaceAdmin username={username} />;
       case 'api-docs':
         return <SwaggerDocs />;
       default:

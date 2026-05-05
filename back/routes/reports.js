@@ -14,6 +14,7 @@
  * Reportes de sistema (agregaciones predefinidas, perm: view_reports):
  *   POST   /api/reports/system/disposition-summary    Conteo y duración por estado
  *   POST   /api/reports/system/temporal-distribution  Distribución por hora / día
+ *   POST   /api/reports/system/agent-pause-summary    Tiempo en pausa por agente y tipo
  */
 const express = require('express');
 const router = express.Router();
@@ -544,6 +545,63 @@ router.post('/system/temporal-distribution', requirePermission('view_reports'), 
         });
     } catch (error) {
         console.error('[reports] Error in temporal-distribution:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Tiempo total en pausa (workspace: NOT_READY / NOT_READY_*) por agente.
+ * Incluye pausas abiertas (ended_at NULL) hasta endDatetime.
+ * La duración siempre se recorta al rango solicitado (solape).
+ */
+router.post('/system/agent-pause-summary', requirePermission('view_reports'), async (req, res) => {
+    try {
+        const { campaigns = [], startDatetime, endDatetime } = req.body || {};
+        if (!startDatetime || !endDatetime) {
+            return res.status(400).json({ success: false, error: 'startDatetime y endDatetime son requeridos' });
+        }
+        const accessible = await getAccessibleCampaignIds(req);
+        const finalCampaigns = intersectCampaigns(campaigns, accessible);
+        if (!finalCampaigns || finalCampaigns.length === 0) {
+            return res.status(400).json({ success: false, error: 'No hay campañas accesibles' });
+        }
+
+        const sql = `
+            SELECT
+                s.agent_username,
+                s.pause_code,
+                COUNT(*)::int AS pause_sessions,
+                COALESCE(SUM(GREATEST(0,
+                    FLOOR(EXTRACT(EPOCH FROM (
+                        LEAST(COALESCE(s.ended_at, $3::timestamptz), $3::timestamptz) - GREATEST(s.started_at, $2::timestamptz)
+                    ))::bigint)
+                )), 0)::bigint AS total_pause_sec
+            FROM gescall_agent_pause_segments s
+            WHERE s.started_at < $3::timestamptz
+              AND COALESCE(s.ended_at, $3::timestamptz) > $2::timestamptz
+              AND (s.campaign_id IS NULL OR s.campaign_id = ANY($1))
+            GROUP BY s.agent_username, s.pause_code
+            ORDER BY s.agent_username ASC, total_pause_sec DESC
+        `;
+        const { rows } = await pg.query(sql, [finalCampaigns, startDatetime, endDatetime]);
+        const formatted = rows.map((r) => ({
+            agent_username: r.agent_username,
+            pause_code: r.pause_code,
+            pause_sessions: Number(r.pause_sessions) || 0,
+            total_pause_sec: Number(r.total_pause_sec) || 0,
+        }));
+        res.json({
+            success: true,
+            data: formatted,
+            meta: {
+                campaigns: finalCampaigns.length,
+                startDatetime,
+                endDatetime,
+                note: 'Incluye sesiones cerradas y pausas abiertas (hasta el fin del rango).',
+            },
+        });
+    } catch (error) {
+        console.error('[reports] Error in agent-pause-summary:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

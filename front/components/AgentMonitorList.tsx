@@ -9,29 +9,42 @@ import {
 } from './ui/table';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
-import { 
-  Phone, 
+import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
+import {
+  Phone,
   Activity,
   Pause,
   FileText,
   XCircle,
-  Eye,
-  PhoneCall,
-  Ban,
-  Settings,
   Ear,
   MessageSquare,
-  Users,
-  Monitor,
-  Edit,
+  UserCheck,
+  LogOut,
+  Loader2,
+  MoreHorizontal,
 } from 'lucide-react';
-import { AgentStateChangeDialog } from './AgentStateChangeDialog';
-import { AgentScreenViewDialog } from './AgentScreenViewDialog';
-import { toast } from 'sonner';
-import type { Agent, AgentStatus } from './AgentMonitor';
+import type { Agent, AgentMonitorActionHandlers, AgentStatus } from './AgentMonitor';
 
 interface AgentMonitorListProps {
   agents: Agent[];
+  actionHandlers?: AgentMonitorActionHandlers;
 }
 
 const getStatusConfig = (status: AgentStatus) => {
@@ -83,127 +96,8 @@ const formatTime = (seconds: number): string => {
   }
 };
 
-export function AgentMonitorList({ agents }: AgentMonitorListProps) {
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [isStateChangeDialogOpen, setIsStateChangeDialogOpen] = useState(false);
-  const [isScreenViewDialogOpen, setIsScreenViewDialogOpen] = useState(false);
-
-  const handleStateChange = (agent: Agent) => {
-    setSelectedAgent(agent);
-    setIsStateChangeDialogOpen(true);
-  };
-
-  const handleScreenView = (agent: Agent) => {
-    setSelectedAgent(agent);
-    setIsScreenViewDialogOpen(true);
-  };
-
-  const handleStateChangeConfirm = (newStatus: AgentStatus, pauseCode?: string, reason?: string) => {
-    if (selectedAgent) {
-      toast.success(
-        `Estado de ${selectedAgent.name} cambiado a ${newStatus}${pauseCode ? ` (${pauseCode})` : ''}${reason ? ` - ${reason}` : ''}`
-      );
-    }
-  };
-
-  const getAgentMenuItems = (agent: Agent) => {
-    const isInCall = agent.status === 'incall';
-    
-    return [
-      {
-        label: 'Ver Detalles',
-        icon: <Eye className="w-4 h-4" />,
-        action: () => {
-          toast.info(`Ver detalles de ${agent.name}`);
-        },
-      },
-      {
-        label: 'Ver Pantalla',
-        icon: <Monitor className="w-4 h-4" />,
-        action: () => handleScreenView(agent),
-        separator: true,
-      },
-      // Opciones de supervisión de llamadas (solo si está en llamada)
-      ...(isInCall ? [
-        {
-          label: 'Espiar Llamada',
-          icon: <Ear className="w-4 h-4" />,
-          action: () => {
-            toast.success(`Espiando llamada de ${agent.name}`, {
-              description: 'Escuchando sin que el agente ni el cliente lo sepan',
-            });
-          },
-        },
-        {
-          label: 'Susurrar a Agente',
-          icon: <MessageSquare className="w-4 h-4" />,
-          action: () => {
-            toast.success(`Susurrando a ${agent.name}`, {
-              description: 'Solo el agente puede escucharte',
-            });
-          },
-        },
-        {
-          label: 'Intervenir en Llamada',
-          icon: <Users className="w-4 h-4" />,
-          action: () => {
-            toast.success(`Interviniendo en llamada de ${agent.name}`, {
-              description: 'Ahora puedes hablar con el agente y el cliente',
-            });
-          },
-          separator: true,
-        },
-      ] : []),
-      {
-        label: 'Cambiar Estado',
-        icon: <Edit className="w-4 h-4" />,
-        action: () => {
-          if (isInCall) {
-            toast.error('No se puede cambiar el estado mientras está en llamada');
-          } else {
-            handleStateChange(agent);
-          }
-        },
-        disabled: isInCall,
-      },
-      {
-        label: 'Llamar a Agente',
-        icon: <PhoneCall className="w-4 h-4" />,
-        action: () => {
-          toast.success(`Llamando a ${agent.name} (${agent.extension})`);
-        },
-        separator: true,
-      },
-      {
-        label: 'Forzar Pausa',
-        icon: <Pause className="w-4 h-4" />,
-        action: () => {
-          if (isInCall) {
-            toast.error('No se puede pausar mientras está en llamada');
-          } else {
-            toast.warning(`Pausando agente ${agent.name}`);
-          }
-        },
-        disabled: isInCall,
-      },
-      {
-        label: 'Desconectar Agente',
-        icon: <Ban className="w-4 h-4" />,
-        action: () => {
-          toast.error(`Desconectando agente ${agent.name}`);
-        },
-        variant: 'danger' as const,
-        separator: true,
-      },
-      {
-        label: 'Configurar Agente',
-        icon: <Settings className="w-4 h-4" />,
-        action: () => {
-          toast.info(`Configurando ${agent.name}`);
-        },
-      },
-    ];
-  };
+export function AgentMonitorList({ agents, actionHandlers }: AgentMonitorListProps) {
+  const [agentPendingLogout, setAgentPendingLogout] = useState<Agent | null>(null);
 
   const getInitials = (name: string) => {
     return name
@@ -228,6 +122,9 @@ export function AgentMonitorList({ agents }: AgentMonitorListProps) {
                 <TableHead className="bg-white">Llamada Actual</TableHead>
                 <TableHead className="bg-white text-right">Llamadas Hoy</TableHead>
                 <TableHead className="bg-white text-right">Tiempo Hablado</TableHead>
+                {actionHandlers?.canManageSupervisorActions && (
+                  <TableHead className="bg-white text-right">Acciones</TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -296,6 +193,59 @@ export function AgentMonitorList({ agents }: AgentMonitorListProps) {
                         {formatTime(agent.todayStats.talkTime)}
                       </div>
                     </TableCell>
+                    {actionHandlers?.canManageSupervisorActions && (
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              {actionHandlers.getLoadingAction(agent.username) ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <MoreHorizontal className="w-4 h-4" />
+                              )}
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              disabled={
+                                !!actionHandlers.getLoadingAction(agent.username) ||
+                                !actionHandlers.canSpyOrWhisper(agent)
+                              }
+                              onClick={() => actionHandlers.onAction(agent, 'spy')}
+                            >
+                              <Ear className="w-4 h-4" />
+                              Espiar
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={
+                                !!actionHandlers.getLoadingAction(agent.username) ||
+                                !actionHandlers.canSpyOrWhisper(agent)
+                              }
+                              onClick={() => actionHandlers.onAction(agent, 'whisper')}
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                              Susurrar
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!!actionHandlers.getLoadingAction(agent.username)}
+                              onClick={() => actionHandlers.onAction(agent, 'force-ready')}
+                            >
+                              <UserCheck className="w-4 h-4" />
+                              Force ready
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={!!actionHandlers.getLoadingAction(agent.username)}
+                              onClick={() => setAgentPendingLogout(agent)}
+                            >
+                              <LogOut className="w-4 h-4" />
+                              Remote logout
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    )}
                   </TableRow>
               );
             })}
@@ -304,31 +254,32 @@ export function AgentMonitorList({ agents }: AgentMonitorListProps) {
         </div>
       </div>
 
-      {/* Dialogs */}
-      {selectedAgent && (
-        <>
-          <AgentStateChangeDialog
-            isOpen={isStateChangeDialogOpen}
-            onClose={() => {
-              setIsStateChangeDialogOpen(false);
-              setSelectedAgent(null);
-            }}
-            agentName={selectedAgent.name}
-            currentStatus={selectedAgent.status}
-            onConfirm={handleStateChangeConfirm}
-          />
-
-          <AgentScreenViewDialog
-            isOpen={isScreenViewDialogOpen}
-            onClose={() => {
-              setIsScreenViewDialogOpen(false);
-              setSelectedAgent(null);
-            }}
-            agentName={selectedAgent.name}
-            agentExtension={selectedAgent.extension}
-          />
-        </>
-      )}
+      <AlertDialog open={!!agentPendingLogout} onOpenChange={(open) => !open && setAgentPendingLogout(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar logout remoto</AlertDialogTitle>
+            <AlertDialogDescription>
+              {agentPendingLogout
+                ? `Vas a cerrar la sesión de ${agentPendingLogout.name}. Esta acción puede desconectar su workspace.`
+                : 'Esta acción requiere confirmación.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (agentPendingLogout && actionHandlers) {
+                  actionHandlers.onAction(agentPendingLogout, 'remote-logout');
+                }
+                setAgentPendingLogout(null);
+              }}
+            >
+              Confirmar logout
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

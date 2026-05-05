@@ -52,13 +52,13 @@ interface Campaign {
 
   autoDialLevel?: string;
   maxRetries?: number;
+  workspaceDailyTarget?: number;
   retrySettings?: Record<string, number>;
   leadStructureSchema?: {name: string, required: boolean, is_phone?: boolean}[];
   ttsTemplates?: any[];
   altPhoneEnabled?: boolean;
   campaign_type?: string;
   agent_count?: number;
-  trunk_id?: string | null;
   moh_class?: string | null;
   moh_custom_file?: string | null;
   dialSchedule?: {
@@ -67,6 +67,9 @@ interface Campaign {
     windows?: { days?: number[]; start?: string; end?: string }[];
   };
   scheduleTemplateId?: number | null;
+  teleprompterTemplate?: string;
+  teleprompterDayparts?: { day?: string; afternoon?: string; night?: string };
+  pauseSettings?: Record<string, { enabled: boolean; limit_seconds: number }>;
 }
 
 interface CampaignsProps {
@@ -186,17 +189,20 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
 
                 autoDialLevel: camp.auto_dial_level ? String(camp.auto_dial_level) : '0',
                 maxRetries: camp.max_retries ?? 3,
+                workspaceDailyTarget: camp.workspace_daily_target ?? 20,
                 retrySettings: camp.retry_settings || undefined,
                 leadStructureSchema: camp.lead_structure_schema || undefined,
                 ttsTemplates: camp.tts_templates || [],
                 altPhoneEnabled: camp.alt_phone_enabled || false,
                 campaign_type: camp.campaign_type || 'BLASTER',
                 agent_count: camp.agent_count || 0,
-                trunk_id: camp.trunk_id || null,
                 moh_class: camp.moh_class || null,
                 moh_custom_file: camp.moh_custom_file || null,
                 dialSchedule: camp.dial_schedule || undefined,
                 scheduleTemplateId: camp.schedule_template_id ?? null,
+                teleprompterTemplate: camp.teleprompter_template || '',
+                teleprompterDayparts: camp.teleprompter_dayparts || undefined,
+                pauseSettings: camp.pause_settings || undefined,
               };
             } catch (err) {
               console.error(`[Campaigns] Error fetching progress for ${camp.campaign_id}:`, err);
@@ -211,11 +217,14 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 activeAgents: 0,
                 lastActivity: new Date().toISOString(),
                 autoDialLevel: '0',
+                workspaceDailyTarget: camp.workspace_daily_target ?? 20,
                 campaign_type: camp.campaign_type || 'BLASTER',
                 agent_count: 0,
-                trunk_id: camp.trunk_id || null,
                 moh_class: camp.moh_class || null,
                 moh_custom_file: camp.moh_custom_file || null,
+                teleprompterTemplate: camp.teleprompter_template || '',
+                teleprompterDayparts: camp.teleprompter_dayparts || undefined,
+                pauseSettings: camp.pause_settings || undefined,
               };
             }
           })

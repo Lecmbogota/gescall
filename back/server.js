@@ -22,6 +22,7 @@ const listsRoutes = require('./routes/lists');
 const campaignsRoutes = require('./routes/campaigns');
 const leadsRoutes = require('./routes/leads');
 const agentsRoutes = require('./routes/agents');
+const supervisorAgentsRoutes = require('./routes/supervisorAgents');
 const dashboardRoutes = require('./routes/dashboard');
 const audioRoutes = require('./routes/audio'); 
 const dncRoutes = require('./routes/dnc');
@@ -34,7 +35,7 @@ const ticketsRoutes = require('./routes/tickets');
 const usersRoutes = require('./routes/users');
 const rolesRoutes = require('./routes/roles');
 const ttsNodesRoutes = require('./routes/ttsNodes');
-const didsRoutes = require('./routes/dids');
+const routingRoutes = require('./routes/routing');
 
 const schedulerService = require('./services/schedulerService');
 const uploadTaskService = require('./services/uploadTaskService');
@@ -160,6 +161,7 @@ app.use('/api/lists', listsRoutes);
 app.use('/api/leads', leadsRoutes);
 app.use('/api/campaigns', campaignsRoutes);
 app.use('/api/agents', agentsRoutes);
+app.use('/api/supervisor/agents', supervisorAgentsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api/dnc', dncRoutes);
@@ -170,7 +172,7 @@ app.use('/api/ivr-flows', ivrFlowsRoutes(pgDatabase));
 app.use('/api/trunks', trunksRoutes(pgDatabase));
 app.use('/api/users', usersRoutes);
 app.use('/api/roles', rolesRoutes);
-app.use('/api/dids', didsRoutes);
+app.use('/api/routing', routingRoutes);
 app.use('/api/tts-nodes', ttsNodesRoutes(pgDatabase));
 app.use('/api/tickets', ticketsRoutes(io));
 app.use('/api/metrics', require('./routes/metrics'));
@@ -178,6 +180,7 @@ app.use('/api/settings', require('./routes/settings'));
 app.use('/api/typifications', require('./routes/typifications'));
 app.use('/api/dispositions', require('./routes/dispositions'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/agent-workspace', require('./routes/agentWorkspace'));
 
 app.get('/api/docs.json', async (req, res) => {
   try {
@@ -257,6 +260,9 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3001;
 
 console.log('✓ PostgreSQL Native Mode active');
+const routingCache = require('./services/routingCache');
+const redisClient = require('./config/redisClient');
+routingCache.init(redisClient).catch(err => console.warn('⚠ routingCache init deferred:', err.message));
 ariService.init(io).catch(err => console.warn('⚠ ARI init deferred:', err.message));
 
 console.log('[Routing] Go Dialer Engine handles calls now.');

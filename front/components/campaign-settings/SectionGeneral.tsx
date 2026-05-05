@@ -16,7 +16,7 @@ interface CampaignSummary {
 
 interface Props {
     campaign: CampaignSummary;
-    selectedTrunkLabel?: string | null;
+    outboundTrunkSummary?: string | null;
     scheduleTemplateName?: string | null;
 }
 
@@ -33,7 +33,7 @@ const STATUS_LABEL: Record<string, { label: string; icon: any; cls: string }> = 
     inactive: { label: "Inactiva", icon: XCircle, cls: "bg-slate-100 text-slate-600 border-slate-200" },
 };
 
-export function SectionGeneral({ campaign, selectedTrunkLabel, scheduleTemplateName }: Props) {
+export function SectionGeneral({ campaign, outboundTrunkSummary, scheduleTemplateName }: Props) {
     const type = TYPE_LABEL[campaign.campaign_type || "OUTBOUND"] || TYPE_LABEL.OUTBOUND;
     const TypeIcon = type.icon;
     const status = STATUS_LABEL[campaign.status] || STATUS_LABEL.inactive;
@@ -70,7 +70,7 @@ export function SectionGeneral({ campaign, selectedTrunkLabel, scheduleTemplateN
             ? [{ label: "Máx. intentos", value: <span className="font-mono text-slate-700">{campaign.maxRetries ?? 3}</span> }]
             : []),
         ...(campaign.campaign_type !== "INBOUND"
-            ? [{ label: "Troncal asignada", value: <span className="text-slate-700">{selectedTrunkLabel || <span className="italic text-slate-400">Default (.env)</span>}</span> }]
+            ? [{ label: "Troncal saliente", value: <span className="text-slate-700">{outboundTrunkSummary || <span className="italic text-slate-400">Sin regla de enrutamiento</span>}</span> }]
             : []),
         ...(campaign.campaign_type !== "INBOUND"
             ? [{ label: "Horario asignado", value: <span className="text-slate-700">{scheduleTemplateName || <span className="italic text-slate-400">Sin restricción</span>}</span> }]

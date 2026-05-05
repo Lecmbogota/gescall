@@ -106,18 +106,27 @@ import {
     DialogDescription,
     DialogFooter,
 } from "./ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Checkbox } from "./ui/checkbox";
 import { DateRangePicker } from 'react-date-range';
 import { es } from 'date-fns/locale';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import { CampaignSettingsTab } from './campaign-settings/CampaignSettingsTab';
+import { PauseSettingsState } from './campaign-settings/SectionPauses';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getDetailDisplayStatus, translateLeadStatus } from "@/utils/callStatusUtils";
 import socketService from "@/services/socket";
 import { CallerIDPoolsManager } from './CallerIDPoolsManager';
-import { InboundDidsManager } from './InboundDidsManager';
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatForBackendAPI, formatToGlobalTimezone } from "@/lib/dateUtils";
 import WaveSurfer from 'wavesurfer.js';
@@ -273,7 +282,6 @@ interface Campaign {
     retrySettings?: Record<string, number>;
     altPhoneEnabled?: boolean;
     campaign_type?: string;
-    trunk_id?: string | null;
     predictive_target_drop_rate?: number;
     predictive_min_factor?: number;
     predictive_max_factor?: number;
@@ -283,6 +291,19 @@ interface Campaign {
         windows?: { days?: number[]; start?: string; end?: string }[];
     };
     scheduleTemplateId?: number | null;
+    teleprompterTemplate?: string;
+    teleprompterDayparts?: {
+        day?: string;
+        afternoon?: string;
+        night?: string;
+        day_start?: number;
+        day_end?: number;
+        afternoon_start?: number;
+        afternoon_end?: number;
+        night_start?: number;
+        night_end?: number;
+    };
+    pauseSettings?: PauseSettingsState;
     recording_settings?: {
         enabled?: boolean;
         storage?: string;
@@ -295,6 +316,82 @@ interface Campaign {
         bucket?: string;
         filename_pattern?: string;
     };
+}
+
+const DEFAULT_PAUSE_SETTINGS: PauseSettingsState = {
+    not_ready: { enabled: true, limit_seconds: 600, label: "No disponible" },
+    not_ready_bano: { enabled: true, limit_seconds: 900, label: "Pausa - Baño" },
+    not_ready_almuerzo: { enabled: true, limit_seconds: 1800, label: "Pausa - Almuerzo" },
+    not_ready_backoffice: { enabled: true, limit_seconds: 900, label: "Pausa - Backoffice" },
+    not_ready_capacitacion: { enabled: true, limit_seconds: 3600, label: "Pausa - Capacitación" },
+};
+
+const PAUSE_SETTING_KEYS = Object.keys(DEFAULT_PAUSE_SETTINGS);
+const DEFAULT_TELEPROMPTER_DAYPARTS = {
+    day: "día",
+    afternoon: "tarde",
+    night: "noche",
+    day_start: 6,
+    day_end: 11,
+    afternoon_start: 12,
+    afternoon_end: 18,
+    night_start: 19,
+    night_end: 5,
+};
+
+function normalizeTeleprompterDayparts(raw?: any) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const toHour = (v: any, fallback: number) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(0, Math.min(23, Math.floor(n)));
+    };
+    return {
+        day: typeof src.day === 'string' && src.day.trim() ? src.day.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.day,
+        afternoon: typeof src.afternoon === 'string' && src.afternoon.trim() ? src.afternoon.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.afternoon,
+        night: typeof src.night === 'string' && src.night.trim() ? src.night.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.night,
+        day_start: toHour(src.day_start, DEFAULT_TELEPROMPTER_DAYPARTS.day_start),
+        day_end: toHour(src.day_end, DEFAULT_TELEPROMPTER_DAYPARTS.day_end),
+        afternoon_start: toHour(src.afternoon_start, DEFAULT_TELEPROMPTER_DAYPARTS.afternoon_start),
+        afternoon_end: toHour(src.afternoon_end, DEFAULT_TELEPROMPTER_DAYPARTS.afternoon_end),
+        night_start: toHour(src.night_start, DEFAULT_TELEPROMPTER_DAYPARTS.night_start),
+        night_end: toHour(src.night_end, DEFAULT_TELEPROMPTER_DAYPARTS.night_end),
+    };
+}
+
+function normalizePauseSettings(raw?: any): PauseSettingsState {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const customKeys = Object.keys(src).filter((k) => k === 'not_ready' || /^not_ready_[a-z0-9_]{2,60}$/i.test(k));
+    const keys = Array.from(new Set([...PAUSE_SETTING_KEYS, ...customKeys]));
+    const out: PauseSettingsState = {};
+    for (const key of keys) {
+        const base = DEFAULT_PAUSE_SETTINGS[key] || { enabled: true, limit_seconds: 600, label: key.replace(/^not_ready_?/, "").replace(/_/g, " ") };
+        const incoming = src[key] && typeof src[key] === 'object' ? src[key] : {};
+        const enabled =
+            typeof incoming.enabled === 'boolean'
+                ? incoming.enabled
+                : !!base.enabled;
+        const n = Number(incoming.limit_seconds);
+        const limit_seconds = Number.isFinite(n)
+            ? Math.max(15, Math.min(28800, Math.floor(n)))
+            : (base.limit_seconds || 600);
+        const labelRaw = typeof incoming.label === "string" ? incoming.label.trim() : "";
+        const label = (labelRaw || base.label || key).slice(0, 80);
+        out[key] = { enabled, limit_seconds, label };
+    }
+    return out;
+}
+
+function pauseSettingsEqual(a: PauseSettingsState, b: PauseSettingsState): boolean {
+    const keys = Array.from(new Set([...Object.keys(a || {}), ...Object.keys(b || {}), ...PAUSE_SETTING_KEYS]));
+    for (const key of keys) {
+        const av = a[key] || DEFAULT_PAUSE_SETTINGS[key] || { enabled: false, limit_seconds: 0, label: key };
+        const bv = b[key] || DEFAULT_PAUSE_SETTINGS[key] || { enabled: false, limit_seconds: 0, label: key };
+        if (!!av.enabled !== !!bv.enabled) return false;
+        if ((av.limit_seconds || 0) !== (bv.limit_seconds || 0)) return false;
+        if (String(av.label || "").trim() !== String(bv.label || "").trim()) return false;
+    }
+    return true;
 }
 
 interface CampaignDetailPageProps {
@@ -384,8 +481,7 @@ export function CampaignDetailPage({
     const [activeSince, setActiveSince] = useState<string | null>(null);
     const [activeTimer, setActiveTimer] = useState<string>('00:00:00');
     const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
-    const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
-    const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
+    const [outboundTrunkSummary, setOutboundTrunkSummary] = useState<string | null>(null);
 
     // Predictive settings state
     const [predTargetDropRate, setPredTargetDropRate] = useState<number>(campaign.predictive_target_drop_rate ?? 0.03);
@@ -395,6 +491,9 @@ export function CampaignDetailPage({
     // Selector de plantilla de horario reutilizable (sustituye al editor inline).
     const [scheduleTemplates, setScheduleTemplates] = useState<{ id: number; name: string; enabled: boolean; timezone: string; windows: { days: number[]; start: string; end: string }[] }[]>([]);
     const [scheduleTemplateId, setScheduleTemplateId] = useState<number | null>(campaign.scheduleTemplateId ?? null);
+    const [teleprompterTemplate, setTeleprompterTemplate] = useState<string>(campaign.teleprompterTemplate || "");
+    const [teleprompterDayparts, setTeleprompterDayparts] = useState(normalizeTeleprompterDayparts(campaign.teleprompterDayparts));
+    const [pauseSettings, setPauseSettings] = useState<PauseSettingsState>(normalizePauseSettings(campaign.pauseSettings));
     const [savingScheduleTemplate, setSavingScheduleTemplate] = useState(false);
     const [loadingScheduleTemplates, setLoadingScheduleTemplates] = useState(false);
 
@@ -434,14 +533,28 @@ export function CampaignDetailPage({
 
     const canSaveRecording = recordingStorage === 'local' || (recordingStorage === 'external' && isRecordingConnectionApproved);
 
-    // Fetch trunks list
     useEffect(() => {
-        api.getTrunks().then((resp: any) => {
-            if (Array.isArray(resp)) {
-                setAvailableTrunks(resp);
-            }
-        }).catch(() => {});
-    }, []);
+        if (campaign.campaign_type === 'INBOUND') {
+            setOutboundTrunkSummary(null);
+            return;
+        }
+        let cancelled = false;
+        api.getEffectiveOutboundTrunk(campaign.id)
+            .then((res: any) => {
+                if (cancelled) return;
+                const d = res?.data;
+                if (!d?.effective_trunk_id) {
+                    setOutboundTrunkSummary(null);
+                    return;
+                }
+                const text = `${d.effective_trunk_name || d.effective_trunk_id} (${d.effective_trunk_id})`;
+                setOutboundTrunkSummary(text);
+            })
+            .catch(() => {
+                if (!cancelled) setOutboundTrunkSummary(null);
+            });
+        return () => { cancelled = true; };
+    }, [campaign.id, campaign.campaign_type]);
 
     // Structure Schema State
     const [structureSchema, setStructureSchema] = useState<{name: string; required: boolean; is_phone?: boolean}[]>(
@@ -569,6 +682,7 @@ export function CampaignDetailPage({
         setCampaignStatus(campaign.status);
         setDialLevel(campaign.autoDialLevel || "1.0");
         setMaxRetries(campaign.maxRetries ?? 3);
+        setAltPhoneEnabled(campaign.altPhoneEnabled || false);
         setTtsTemplates(campaign.ttsTemplates || []);
         if (campaign.predictive_target_drop_rate !== undefined) {
             setPredTargetDropRate(campaign.predictive_target_drop_rate);
@@ -580,7 +694,10 @@ export function CampaignDetailPage({
             setPredMaxFactor(campaign.predictive_max_factor);
         }
         setScheduleTemplateId(campaign.scheduleTemplateId ?? null);
-    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule, campaign.scheduleTemplateId]);
+        setTeleprompterTemplate(campaign.teleprompterTemplate || "");
+        setTeleprompterDayparts(normalizeTeleprompterDayparts(campaign.teleprompterDayparts));
+        setPauseSettings(normalizePauseSettings(campaign.pauseSettings));
+    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule, campaign.scheduleTemplateId, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings]);
 
     // Carga las plantillas de horario disponibles (una sola vez por sesión de detalle).
     useEffect(() => {
@@ -619,6 +736,7 @@ export function CampaignDetailPage({
     const hasConfigChanges = useMemo(() => {
         if (dialLevel.toString() !== (campaign.autoDialLevel?.toString() || "1.0")) return true;
         if (maxRetries !== (campaign.maxRetries ?? 3)) return true;
+        if (altPhoneEnabled !== (campaign.altPhoneEnabled || false)) return true;
         
         const origHangup = campaign.retrySettings?.HANGUP ?? 30;
         if (retryGroups.Rechazada.enabled !== (origHangup >= 0)) return true;
@@ -644,16 +762,19 @@ export function CampaignDetailPage({
         if (retryGroups.FalloTecnico.enabled !== (origFailed >= 0)) return true;
         if (retryGroups.FalloTecnico.minutes !== Math.max(origFailed, 1)) return true;
 
-        if ((selectedTrunkId === '__none__' ? '' : selectedTrunkId) !== (campaign.trunk_id || '')) return true;
-
         if (campaign.campaign_type === 'OUTBOUND_PREDICTIVE') {
             if (predTargetDropRate !== (campaign.predictive_target_drop_rate ?? 0.03)) return true;
             if (predMinFactor !== (campaign.predictive_min_factor ?? 1.0)) return true;
             if (predMaxFactor !== (campaign.predictive_max_factor ?? 4.0)) return true;
         }
+        if (teleprompterTemplate.trim() !== (campaign.teleprompterTemplate || "").trim()) return true;
+        if (JSON.stringify(teleprompterDayparts) !== JSON.stringify(normalizeTeleprompterDayparts(campaign.teleprompterDayparts))) return true;
+        if (['INBOUND', 'OUTBOUND_PROGRESSIVE', 'OUTBOUND_PREDICTIVE'].includes(campaign.campaign_type || '')) {
+            if (!pauseSettingsEqual(pauseSettings, normalizePauseSettings(campaign.pauseSettings))) return true;
+        }
         
         return false;
-    }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, predTargetDropRate, predMinFactor, predMaxFactor, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type]);
+    }, [dialLevel, maxRetries, altPhoneEnabled, retryGroups, predTargetDropRate, predMinFactor, predMaxFactor, teleprompterTemplate, teleprompterDayparts, pauseSettings, campaign.autoDialLevel, campaign.maxRetries, campaign.altPhoneEnabled, campaign.retrySettings, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type, campaign.teleprompterTemplate, campaign.teleprompterDayparts, campaign.pauseSettings]);
 
     const scheduleTemplateDirty = useMemo(() => {
         return (scheduleTemplateId ?? null) !== (campaign.scheduleTemplateId ?? null);
@@ -689,17 +810,31 @@ export function CampaignDetailPage({
                 api.updateCampaignDialLevel(campaign.id, dialLevel),
                 api.updateCampaignRetries(campaign.id, maxRetries),
                 api.updateCampaignRetrySettings(campaign.id, expandedRetrySettings),
-                api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId),
                 ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
                 api.updateCampaignPredictive(campaign.id, {
                     predictive_target_drop_rate: predTargetDropRate,
                     predictive_min_factor: predMinFactor,
                     predictive_max_factor: predMaxFactor,
                 })
-                ] : [])
+                ] : []),
+                ...(campaign.campaign_type !== 'BLASTER' ? [
+                    api.updateCampaignTeleprompterScript(campaign.id, teleprompterTemplate),
+                    api.updateCampaignTeleprompterDayparts(campaign.id, teleprompterDayparts),
+                ] : []),
+                api.updateCampaignAltPhone(campaign.id, altPhoneEnabled),
+                ...(['INBOUND', 'OUTBOUND_PROGRESSIVE', 'OUTBOUND_PREDICTIVE'].includes(campaign.campaign_type || '') ? [
+                    api.updateCampaignPauseSettings(campaign.id, pauseSettings),
+                ] : []),
             ]);
             toast.success("Configuración general guardada correctamente");
             if (onUpdateCampaign) onUpdateCampaign();
+            try {
+                const res: any = await api.getEffectiveOutboundTrunk(campaign.id);
+                const d = res?.data;
+                if (d?.effective_trunk_id) {
+                    setOutboundTrunkSummary(`${d.effective_trunk_name || d.effective_trunk_id} (${d.effective_trunk_id})`);
+                } else setOutboundTrunkSummary(null);
+            } catch { /* ignore */ }
         } catch (error: any) {
             toast.error(error.message || "Error al guardar configuración");
         } finally {
@@ -909,6 +1044,8 @@ export function CampaignDetailPage({
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [loadingStatuses, setLoadingStatuses] = useState(false);
     const [isRecycling, setIsRecycling] = useState(false);
+    const [listDeleteConfirmId, setListDeleteConfirmId] = useState<number | null>(null);
+    const [isDeletingList, setIsDeletingList] = useState(false);
 
     // TTS Templates state
     const [ttsTemplates, setTtsTemplates] = useState<{ id: string; name: string; content: string }[]>(
@@ -1698,12 +1835,14 @@ export function CampaignDetailPage({
         fetchListStatusCounts(list.list_id);
     };
 
-    const handleDeleteList = async (listId: number) => {
-        if (!confirm("¿Está seguro que desea eliminar esta lista con todos sus leads? Esta acción es irreversible.")) return;
+    const handleConfirmDeleteList = async () => {
+        if (listDeleteConfirmId == null) return;
+        setIsDeletingList(true);
         try {
-            const data = await api.deleteList(listId.toString());
+            const data = await api.deleteList(listDeleteConfirmId.toString());
             if (data.success) {
                 toast.success("Lista eliminada exitosamente");
+                setListDeleteConfirmId(null);
                 fetchCampaignLists();
             } else {
                 toast.error(data.error || "Error al eliminar");
@@ -1711,6 +1850,8 @@ export function CampaignDetailPage({
         } catch (err: any) {
             console.error("Error deleting list:", err);
             toast.error(err.message || "Error al eliminar la lista");
+        } finally {
+            setIsDeletingList(false);
         }
     };
 
@@ -1802,12 +1943,6 @@ export function CampaignDetailPage({
                                 <Settings className="w-4 h-4" />
                                 Ajustes
                             </TabsTrigger>
-                            {campaign.campaign_type === 'INBOUND' && (
-                                <TabsTrigger value="dids" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
-                                    <Phone className="w-4 h-4" />
-                                    DIDs
-                                </TabsTrigger>
-                            )}
                             {campaign.campaign_type !== 'INBOUND' && (
                                 <TabsTrigger value="structure" className={tabTriggerClass + " rounded-lg text-xs sm:text-sm"}>
                                     <Database className="w-4 h-4" />
@@ -2379,7 +2514,7 @@ export function CampaignDetailPage({
                                                             <ContextMenuContent className="w-64">
                                                                 <ContextMenuItem 
                                                                     className="text-red-600 font-semibold cursor-pointer focus:bg-red-50 focus:text-red-700" 
-                                                                    onClick={() => handleDeleteList(list.list_id)}
+                                                                    onClick={() => setListDeleteConfirmId(list.list_id)}
                                                                 >
                                                                     Eliminar Lista y Leads Asociados
                                                                 </ContextMenuItem>
@@ -2523,11 +2658,9 @@ export function CampaignDetailPage({
                 <TabsContent value="config" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden" >
                     <CampaignSettingsTab
                         campaign={campaign}
+                        outboundTrunkSummary={outboundTrunkSummary}
                         dialLevel={dialLevel}
                         setDialLevel={setDialLevel}
-                        selectedTrunkId={selectedTrunkId}
-                        setSelectedTrunkId={setSelectedTrunkId}
-                        availableTrunks={availableTrunks}
                         cpsAvailability={cpsAvailability}
                         predTargetDropRate={predTargetDropRate}
                         setPredTargetDropRate={setPredTargetDropRate}
@@ -2535,6 +2668,8 @@ export function CampaignDetailPage({
                         setPredMinFactor={setPredMinFactor}
                         predMaxFactor={predMaxFactor}
                         setPredMaxFactor={setPredMaxFactor}
+                        amdEnabled={altPhoneEnabled}
+                        setAmdEnabled={setAltPhoneEnabled}
                         maxRetries={maxRetries}
                         setMaxRetries={setMaxRetries}
                         retryGroups={retryGroups}
@@ -2581,15 +2716,15 @@ export function CampaignDetailPage({
                         onTestRecordingConnection={handleTestRecordingConnection}
                         onSaveRecordingSettings={handleSaveRecordingSettings}
                         invalidateRecordingApproved={() => setRecordingApprovedSnapshot(null)}
+                        teleprompterTemplate={teleprompterTemplate}
+                        setTeleprompterTemplate={setTeleprompterTemplate}
+                        teleprompterDayparts={teleprompterDayparts}
+                        setTeleprompterDayparts={setTeleprompterDayparts}
+                        leadStructureFields={structureSchema.map((f) => f.name)}
+                        pauseSettings={pauseSettings}
+                        setPauseSettings={setPauseSettings}
                     />
                 </TabsContent >
-
-                {/* Tab: DIDs (INBOUND only) */}
-                {campaign.campaign_type === 'INBOUND' && (
-                    <TabsContent value="dids" forceMount className="flex-1 overflow-auto min-h-0 mt-0 data-[state=inactive]:hidden p-1">
-                        <InboundDidsManager campaignId={campaign.id} />
-                    </TabsContent>
-                )}
 
                 {/* Tab: Estructura */}
                 <TabsContent value="structure" forceMount className="flex-1 overflow-auto min-h-0 mt-0 data-[state=inactive]:hidden p-1">
@@ -3168,6 +3303,38 @@ export function CampaignDetailPage({
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog
+                open={listDeleteConfirmId !== null}
+                onOpenChange={(open) => {
+                    if (!open && !isDeletingList) setListDeleteConfirmId(null);
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Eliminar lista</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            ¿Está seguro que desea eliminar esta lista con todos sus leads? Esta acción es irreversible.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={isDeletingList}>Cancelar</AlertDialogCancel>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={() => void handleConfirmDeleteList()}
+                            disabled={isDeletingList}
+                        >
+                            {isDeletingList ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                                "Eliminar"
+                            )}
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
             <Dialog open={recordingModalOpen} onOpenChange={setRecordingModalOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>

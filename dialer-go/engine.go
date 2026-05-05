@@ -390,7 +390,18 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 			COALESCE(c.predictive_max_factor, 4.0),
 			COALESCE(c.predictive_adapt_interval_ms, 10000)
 		FROM gescall_campaigns c
-		LEFT JOIN gescall_trunks t ON c.trunk_id = t.trunk_id
+		LEFT JOIN LATERAL (
+			SELECT r.trunk_id AS rule_trunk_id
+			FROM gescall_route_rules r
+			WHERE r.direction = 'OUTBOUND'
+			  AND r.active = true
+			  AND r.destination_type = 'OVERRIDE_TRUNK'
+			  AND r.match_campaign_id = c.campaign_id
+			  AND r.trunk_id IS NOT NULL
+			ORDER BY r.priority ASC, r.id ASC
+			LIMIT 1
+		) ob ON true
+		LEFT JOIN gescall_trunks t ON t.trunk_id = ob.rule_trunk_id
 		WHERE c.active = true 
 		  AND c.campaign_type IN ('BLASTER', 'OUTBOUND_PREDICTIVE', 'OUTBOUND_PROGRESSIVE')
 	`)
@@ -597,6 +608,15 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 		}
 		log.Printf("[RedisDialer] DB claim race lead=%s; requeueing hopper entry", leadID)
 		requeueHopperLead(camp.CampaignID, leadJSON)
+		return
+	}
+
+	// Second line: number added to DNC after hopper load — drop call without originate (same predicate as hopper SQL).
+	if phoneBlockedByDNC(DB, targetPhone, camp.CampaignID) {
+		log.Printf("[RedisDialer] DNC block lead=%s phone=%s campaign=%s — skip originate", leadID, digitsOnly(targetPhone), camp.CampaignID)
+		if _, err := DB.Exec("UPDATE gescall_leads SET status = 'DNCC', last_call_time = NOW() WHERE lead_id = $1", leadID); err != nil {
+			log.Printf("[RedisDialer] DNC lead update failed lead=%s: %v", leadID, err)
+		}
 		return
 	}
 

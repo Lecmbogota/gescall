@@ -1,8 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { useAuthStore } from '../stores/authStore';
-import api from '../services/api';
+import React from 'react';
 
-interface Goal {
+export interface AgentGoalRow {
   id: string;
   campaignName: string;
   target: number;
@@ -11,59 +9,12 @@ interface Goal {
   icon: 'trophy' | 'target' | 'star';
 }
 
-export const GoalsWidget: React.FC = () => {
-  const { user } = useAuthStore(state => state.session || { user: null });
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+interface GoalsWidgetProps {
+  goals: AgentGoalRow[];
+  loading?: boolean;
+}
 
-  useEffect(() => {
-    // Simulated fetch of agent's campaign goals.
-    // Replace with actual API call: api.get(`/users/${user?.id}/goals`)
-    const fetchGoals = async () => {
-      setIsLoading(true);
-      try {
-        // Mock data representing N goals from different campaigns
-        const mockGoals: Goal[] = [
-          {
-            id: 'g1',
-            campaignName: 'Ventas TIGO Residencial',
-            target: 20,
-            current: 12,
-            color: 'amber',
-            icon: 'trophy'
-          },
-          {
-            id: 'g2',
-            campaignName: 'Retenciones Claro',
-            target: 50,
-            current: 42,
-            color: 'emerald',
-            icon: 'target'
-          },
-          {
-            id: 'g3',
-            campaignName: 'Encuestas de Satisfacción',
-            target: 100,
-            current: 25,
-            color: 'blue',
-            icon: 'star'
-          }
-        ];
-        
-        // Simulating network delay
-        setTimeout(() => {
-          setGoals(mockGoals);
-          setIsLoading(false);
-        }, 600);
-      } catch (error) {
-        console.error("Error fetching goals", error);
-        setIsLoading(false);
-      }
-    };
-
-    fetchGoals();
-  }, [user]);
-
+export const GoalsWidget: React.FC<GoalsWidgetProps> = ({ goals, loading = false }) => {
   const getColorClasses = (colorName: string) => {
     switch (colorName) {
       case 'amber': return { text: 'text-amber-500', bg: 'bg-amber-500', lightText: 'text-amber-600' };
@@ -88,13 +39,12 @@ export const GoalsWidget: React.FC = () => {
 
   return (
     <div className="bg-white/90 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 p-5 flex flex-col gap-5">
-      {/* Header */}
       <div className="flex justify-between items-center mb-1">
         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Metas de Campañas</span>
-        <span className="text-[10px] font-bold text-indigo-400 bg-indigo-50 px-2 py-0.5 rounded-full">{goals.length} Activas</span>
+        <span className="text-[10px] font-bold text-indigo-400 bg-indigo-50 px-2 py-0.5 rounded-full">{loading ? '…' : `${goals.length} Activas`}</span>
       </div>
 
-      {isLoading ? (
+      {loading ? (
         <div className="flex flex-col gap-4 animate-pulse">
           {[1, 2].map(i => (
             <div key={i}>
@@ -105,14 +55,14 @@ export const GoalsWidget: React.FC = () => {
         </div>
       ) : goals.length === 0 ? (
         <div className="py-6 text-center text-sm font-medium text-slate-400">
-          No tienes metas asignadas.
+          No tienes metas asignadas (campañas o meta diaria configurable en admin).
         </div>
       ) : (
         <div className="flex flex-col gap-5">
           {goals.map(goal => {
-            const percentage = Math.min(100, Math.round((goal.current / goal.target) * 100));
+            const percentage = goal.target > 0 ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
             const colors = getColorClasses(goal.color);
-            
+
             return (
               <div key={goal.id} className="group flex flex-col gap-1.5">
                 <div className="flex justify-between items-start">
@@ -122,15 +72,15 @@ export const GoalsWidget: React.FC = () => {
                   </div>
                   <span className={`${colors.lightText} text-xs font-black`}>{percentage}%</span>
                 </div>
-                
+
                 <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  <span>Progreso: {goal.current}</span>
+                  <span>Tipificaciones hoy: {goal.current}</span>
                   <span>Meta: {goal.target}</span>
                 </div>
-                
+
                 <div className="w-full bg-slate-100/80 rounded-full h-2.5 overflow-hidden shadow-inner">
-                  <div 
-                    className={`${colors.bg} h-full rounded-full transition-all duration-1000 ease-out`} 
+                  <div
+                    className={`${colors.bg} h-full rounded-full transition-all duration-1000 ease-out`}
                     style={{ width: `${percentage}%` }}
                   ></div>
                 </div>

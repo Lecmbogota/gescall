@@ -208,6 +208,61 @@ class SocketService {
       timestamp: Date.now()
     });
   }
+
+  /** Suscripción a métricas de turno para el workspace del agente (WebSocket cada ~5 s + disparo inicial). */
+  subscribeAgentWorkspaceMetrics(username: string, callback: (data: AgentWorkspaceMetricsPayload) => void) {
+    this.on('agent:workspace:metrics', callback as any);
+    this.emit('agent:workspace:subscribe', { username });
+  }
+
+  unsubscribeAgentWorkspaceMetrics(username: string, callback?: (data: AgentWorkspaceMetricsPayload) => void) {
+    if (callback) {
+      this.off('agent:workspace:metrics', callback as any);
+    } else {
+      this.off('agent:workspace:metrics');
+    }
+    this.emit('agent:workspace:unsubscribe', { username });
+  }
+
+  subscribeAgentWorkspaceChat(
+    campaignId: string,
+    agentUsername: string,
+    callback: (data: AgentWorkspaceChatMessagePayload) => void,
+    options?: { participantRole?: 'AGENT' | 'SUPERVISOR'; participantUsername?: string }
+  ) {
+    this.on('agent:workspace:chat:message', callback as any);
+    this.emit('agent:workspace:chat:subscribe', {
+      campaign_id: campaignId,
+      agent_username: agentUsername,
+      participant_role: options?.participantRole,
+      participant_username: options?.participantUsername,
+    });
+  }
+
+  unsubscribeAgentWorkspaceChat(
+    campaignId: string,
+    agentUsername: string,
+    callback?: (data: AgentWorkspaceChatMessagePayload) => void
+  ) {
+    if (callback) {
+      this.off('agent:workspace:chat:message', callback as any);
+    } else {
+      this.off('agent:workspace:chat:message');
+    }
+    this.emit('agent:workspace:chat:unsubscribe', {
+      campaign_id: campaignId,
+      agent_username: agentUsername,
+    });
+  }
+
+  onAgentWorkspaceChatPresence(callback: (data: AgentWorkspaceChatPresencePayload) => void) {
+    this.on('agent:workspace:chat:presence', callback as any);
+  }
+
+  offAgentWorkspaceChatPresence(callback?: (data: AgentWorkspaceChatPresencePayload) => void) {
+    if (callback) this.off('agent:workspace:chat:presence', callback as any);
+    else this.off('agent:workspace:chat:presence');
+  }
 }
 
 // Types
@@ -265,6 +320,34 @@ export interface AgentStatusResponse {
   success: boolean;
   data?: any;
   error?: string;
+}
+
+export interface AgentWorkspaceMetricsPayload {
+  username: string;
+  logged_seconds: number;
+  calls_today: number;
+  queue_depth: number;
+  timestamp?: string;
+}
+
+export interface AgentWorkspaceChatMessagePayload {
+  id: number;
+  campaign_id: string;
+  agent_username: string;
+  sender_user_id?: number | null;
+  sender_username: string;
+  sender_role: 'AGENT' | 'SUPERVISOR';
+  body: string;
+  created_at: string;
+}
+
+export interface AgentWorkspaceChatPresencePayload {
+  room: string;
+  supervisor_online: boolean;
+  agent_online: boolean;
+  supervisor_count: number;
+  agent_count: number;
+  timestamp?: string;
 }
 
 export default new SocketService();

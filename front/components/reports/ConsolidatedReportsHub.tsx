@@ -8,16 +8,23 @@ import {
     PieChart,
     Clock,
     Sparkles,
+    Coffee,
 } from "lucide-react";
 import { ConsolidatedReports } from "../ConsolidatedReports";
 import { CampaignSummaryReport } from "./CampaignSummaryReport";
 import { DispositionSummaryReport } from "./DispositionSummaryReport";
 import { TemporalDistributionReport } from "./TemporalDistributionReport";
+import { AgentPauseReport } from "./AgentPauseReport";
 import { CustomReportsList } from "./CustomReportsList";
 import { CustomReportRunner } from "./CustomReportRunner";
-import { ReportTemplate } from "./CustomReportBuilder";
+import type { ReportTemplate } from "./CustomReportBuilder";
 
-type SystemReportId = "call_detail" | "campaign_summary" | "disposition" | "temporal";
+type SystemReportId =
+    | "call_detail"
+    | "campaign_summary"
+    | "disposition"
+    | "temporal"
+    | "agent_pauses";
 
 interface SystemReportDef {
     id: SystemReportId;
@@ -66,6 +73,15 @@ const SYSTEM_REPORTS: SystemReportDef[] = [
         iconText: "text-white",
         cardAccent: "from-amber-50 to-orange-50",
     },
+    {
+        id: "agent_pauses",
+        title: "Pausas por agente",
+        description: "Tiempo y sesiones en pausa del workspace por agente y tipo (No disponible, Baño, Almuerzo, etc.).",
+        icon: Coffee,
+        iconBg: "from-rose-600 to-pink-600",
+        iconText: "text-white",
+        cardAccent: "from-rose-50 to-pink-50",
+    },
 ];
 
 type HubView =
@@ -100,6 +116,8 @@ export function ConsolidatedReportsHub() {
                 return <DispositionSummaryReport onBack={back} />;
             case "temporal":
                 return <TemporalDistributionReport onBack={back} />;
+            case "agent_pauses":
+                return <AgentPauseReport onBack={back} />;
         }
     }
 
@@ -121,8 +139,7 @@ export function ConsolidatedReportsHub() {
                         <FileBarChart2 className="w-5 h-5 text-white" />
                     </div>
                     <div>
-                        <h1 className="text-xl font-semibold text-slate-900 leading-tight">Reportes consolidados</h1>
-                        <p className="text-xs text-slate-500">Reportes preestablecidos del sistema y plantillas personalizadas reutilizables</p>
+                        <h1 className="text-xl font-semibold text-slate-900 leading-tight">Reportes</h1>
                     </div>
                 </div>
             </div>

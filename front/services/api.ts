@@ -75,7 +75,13 @@ class ApiService {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Request failed');
+        const msg = typeof data?.error === 'string' ? data.error : 'Request failed';
+        const err = new Error(msg) as Error & { code?: string; status?: number };
+        if (data && typeof data === 'object' && data.code != null) {
+          err.code = String((data as { code?: unknown }).code);
+        }
+        err.status = response.status;
+        throw err;
       }
 
       return data;
@@ -387,10 +393,10 @@ class ApiService {
     });
   }
 
-  async updateCampaignTrunk(campaignId: string, trunkId: string | null) {
-    return this.request(`/campaigns/${campaignId}/trunk`, {
+  async updateCampaignWorkspaceDailyTarget(campaignId: string, workspaceDailyTarget: number) {
+    return this.request(`/campaigns/${campaignId}/workspace-daily-target`, {
       method: 'PUT',
-      body: JSON.stringify({ trunk_id: trunkId }),
+      body: JSON.stringify({ workspace_daily_target: workspaceDailyTarget }),
     });
   }
 
@@ -405,8 +411,141 @@ class ApiService {
     });
   }
 
+  async updateCampaignTeleprompterScript(campaignId: string, template: string) {
+    return this.request(`/campaigns/${campaignId}/teleprompter-script`, {
+      method: 'PUT',
+      body: JSON.stringify({ template }),
+    });
+  }
+
+  async updateCampaignTeleprompterDayparts(campaignId: string, dayparts: {
+    day: string;
+    afternoon: string;
+    night: string;
+    day_start: number;
+    day_end: number;
+    afternoon_start: number;
+    afternoon_end: number;
+    night_start: number;
+    night_end: number;
+  }) {
+    return this.request(`/campaigns/${campaignId}/teleprompter-dayparts`, {
+      method: 'PUT',
+      body: JSON.stringify({ dayparts }),
+    });
+  }
+
+  async updateCampaignPauseSettings(
+    campaignId: string,
+    pauseSettings: Record<string, { enabled: boolean; limit_seconds: number }>
+  ) {
+    return this.request(`/campaigns/${campaignId}/pause-settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ pause_settings: pauseSettings }),
+    });
+  }
+
   async getCampaignById(campaignId: string) {
     return this.request(`/campaigns?campaign_id=${campaignId}`);
+  }
+
+  async getAgentWorkspaceDashboard(): Promise<{
+    success: boolean;
+    data?: {
+      notices: Array<{ id: number; body: string; campaign_id: string | null; created_at: string }>;
+      callbacks: Array<{
+        id: number;
+        contact_name: string;
+        phone?: string | null;
+        scheduled_at: string;
+        notes?: string | null;
+        campaign_id?: string | null;
+        status: string;
+      }>;
+      goals: Array<{
+        id: string;
+        campaignName: string;
+        target: number;
+        current: number;
+        color: string;
+        icon: 'trophy' | 'target' | 'star';
+      }>;
+      leaderboard: Array<{ rank: number; username: string; score: number; is_self: boolean }>;
+    };
+  }> {
+    return this.request('/agent-workspace/dashboard');
+  }
+
+  async dismissAgentWorkspaceNotice(noticeId: number) {
+    return this.post(`/agent-workspace/notices/${noticeId}/dismiss`, {});
+  }
+
+  async completeAgentWorkspaceCallback(callbackId: number) {
+    return this.request(`/agent-workspace/callbacks/${callbackId}/complete`, { method: 'PATCH' });
+  }
+
+  async verifyAgentWorkspacePausePin(pin: string) {
+    return this.post('/agent-workspace/verify-pause-pin', { pin });
+  }
+
+  async getAgentWorkspaceLead(leadId: string) {
+    return this.request(`/agent-workspace/lead/${encodeURIComponent(leadId)}`);
+  }
+
+  async listAgentWorkspaceNoticesAdmin() {
+    return this.request('/agent-workspace/supervisor/notices');
+  }
+
+  async createAgentWorkspaceSupervisorNotice(data: {
+    body: string;
+    campaign_id?: string | null;
+    starts_at?: string;
+    ends_at?: string | null;
+  }) {
+    return this.post('/agent-workspace/supervisor/notices', data);
+  }
+
+  async deactivateAgentWorkspaceNotice(noticeId: number) {
+    return this.request(`/agent-workspace/supervisor/notices/${noticeId}/deactivate`, { method: 'PATCH' });
+  }
+
+  async listAgentWorkspaceCallbacksAdmin(status?: 'PENDING' | 'DONE' | 'CANCELLED' | 'ALL') {
+    const q =
+      status && status !== 'ALL' ? `?status=${encodeURIComponent(status)}` : '';
+    return this.request(`/agent-workspace/supervisor/callbacks${q}`);
+  }
+
+  async createAgentWorkspaceSupervisorCallback(data: {
+    assignee_user_id: number;
+    contact_name: string;
+    scheduled_at: string;
+    notes?: string | null;
+    campaign_id?: string | null;
+    phone?: string | null;
+  }) {
+    return this.post('/agent-workspace/supervisor/callbacks', data);
+  }
+
+  async cancelAgentWorkspaceSupervisorCallback(callbackId: number) {
+    return this.request(`/agent-workspace/supervisor/callbacks/${callbackId}/cancel`, {
+      method: 'PATCH',
+    });
+  }
+
+  async listAgentWorkspaceChatMessages(params?: { campaign_id?: string; agent_username?: string }) {
+    const qs = new URLSearchParams();
+    if (params?.campaign_id) qs.set('campaign_id', params.campaign_id);
+    if (params?.agent_username) qs.set('agent_username', params.agent_username);
+    const query = qs.toString() ? `?${qs.toString()}` : '';
+    return this.request(`/agent-workspace/chat/messages${query}`);
+  }
+
+  async sendAgentWorkspaceChatMessage(data: {
+    body: string;
+    campaign_id?: string;
+    agent_username?: string;
+  }) {
+    return this.post('/agent-workspace/chat/messages', data);
   }
 
   async updateCampaignAltPhone(campaignId: string, enabled: boolean) {
@@ -687,6 +826,30 @@ class ApiService {
 
   async getAgentStatus(agentUser: string) {
     return this.request(`/agents/${agentUser}/status`);
+  }
+
+  async supervisorSpyAgent(username: string) {
+    return this.request(`/supervisor/agents/${encodeURIComponent(username)}/spy`, {
+      method: 'POST',
+    });
+  }
+
+  async supervisorWhisperAgent(username: string) {
+    return this.request(`/supervisor/agents/${encodeURIComponent(username)}/whisper`, {
+      method: 'POST',
+    });
+  }
+
+  async supervisorForceReadyAgent(username: string) {
+    return this.request(`/supervisor/agents/${encodeURIComponent(username)}/force-ready`, {
+      method: 'POST',
+    });
+  }
+
+  async supervisorRemoteLogoutAgent(username: string) {
+    return this.request(`/supervisor/agents/${encodeURIComponent(username)}/remote-logout`, {
+      method: 'POST',
+    });
   }
 
   // Health check
@@ -1427,6 +1590,72 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  async getAgentPauseSummary(payload: {
+    campaigns: string[];
+    startDatetime: string;
+    endDatetime: string;
+  }) {
+    return this.request('/reports/system/agent-pause-summary', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getRouteRules(direction?: 'INBOUND' | 'OUTBOUND') {
+    const q = direction ? `?direction=${encodeURIComponent(direction)}` : '';
+    return this.request(`/routing/rules${q}`);
+  }
+
+  async getEffectiveOutboundTrunk(campaignId: string) {
+    return this.request(`/routing/effective-outbound/${encodeURIComponent(campaignId)}`);
+  }
+
+  async previewRouteRule(did_number: string, trunk_id?: string | null) {
+    return this.request('/routing/rules/preview', {
+      method: 'POST',
+      body: JSON.stringify({ did_number, trunk_id: trunk_id || null }),
+    });
+  }
+
+  async checkRouteRuleCollision(payload: {
+    direction: 'INBOUND' | 'OUTBOUND';
+    match_did?: string | null;
+    trunk_id?: string | null;
+    match_campaign_id?: string | null;
+    exclude_id?: number | null;
+  }) {
+    return this.request('/routing/rules/check-collision', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createRouteRule(payload: Record<string, unknown>) {
+    return this.request('/routing/rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateRouteRule(id: number, payload: Record<string, unknown>) {
+    return this.request(`/routing/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteRouteRule(id: number) {
+    return this.request(`/routing/rules/${id}`, { method: 'DELETE' });
+  }
+
+  async moveRouteRule(id: number, direction: 'up' | 'down') {
+    return this.request(`/routing/rules/${id}/move?direction=${direction}`, { method: 'PUT' });
+  }
+
+  async getRouteRuleAudit(id: number, limit = 50) {
+    return this.request(`/routing/rules/${id}/audit?limit=${limit}`);
   }
 }
 

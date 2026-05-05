@@ -40,7 +40,7 @@ import {
     Upload,
     Loader2,
 } from 'lucide-react';
-import { useAuthStore, type Campaign } from '../stores/authStore';
+import { useAuthStore } from '../stores/authStore';
 import {
     Dialog,
     DialogContent,
@@ -198,6 +198,24 @@ interface Props {
     onBack?: () => void;
 }
 
+/** IVR visual solo aplica a campañas Blaster (saliente automático) e Inbound. */
+const IVR_ALLOWED_CAMPAIGN_TYPES = new Set(['BLASTER', 'INBOUND']);
+
+function isIvrAllowedCampaignType(t: string | undefined | null): boolean {
+    return !!t && IVR_ALLOWED_CAMPAIGN_TYPES.has(t);
+}
+
+/** Misma lógica que la vista Campañas (filtro «Todos»): no listar campañas archivadas. */
+function isCampaignArchived(c: Record<string, unknown>): boolean {
+    const a = c.archived;
+    return a === true || a === 1 || a === 'Y';
+}
+
+interface IvrCampaignPick {
+    id: string;
+    name: string;
+}
+
 export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -274,7 +292,9 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
         { value: '{{MiCampoCustom}}', label: '✨ Campo JSON (Postgres)' },
     ];
 
-    const campaigns = useAuthStore(state => state.getCampaigns());
+    const getCampaignIds = useAuthStore((state) => state.getCampaignIds);
+    /** null = aún cargando; [] = sin campañas elegibles para IVR */
+    const [ivrCampaignOptions, setIvrCampaignOptions] = useState<IvrCampaignPick[] | null>(null);
     const [ttsTemplates, setTtsTemplates] = useState<any[]>([]);
     const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
@@ -283,6 +303,57 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
     }), [activeNodeId, selectedExecution]);
 
     const API = import.meta.env.VITE_API_URL || 'http://72.251.5.61:3001';
+
+    // Campañas con tipo Blaster o Inbound (datos desde API; el login no siempre trae campaign_type)
+    useEffect(() => {
+        const ids = getCampaignIds();
+        if (!ids.length) {
+            setIvrCampaignOptions([]);
+            return;
+        }
+        let cancelled = false;
+        api.getCampaigns({ allowedCampaigns: ids })
+            .then((res: { success?: boolean; data?: Record<string, unknown>[] }) => {
+                if (cancelled) return;
+                if (!res?.success || !Array.isArray(res.data)) {
+                    setIvrCampaignOptions([]);
+                    return;
+                }
+                const opts: IvrCampaignPick[] = res.data
+                    .filter(
+                        (c) =>
+                            isIvrAllowedCampaignType(c.campaign_type as string | undefined) &&
+                            !isCampaignArchived(c)
+                    )
+                    .map((c) => ({
+                        id: String(c.campaign_id),
+                        name: String(c.campaign_name || c.campaign_id || ''),
+                    }));
+                setIvrCampaignOptions(opts);
+            })
+            .catch(() => {
+                if (!cancelled) setIvrCampaignOptions([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [getCampaignIds]);
+
+    useEffect(() => {
+        if (!campaignId || ivrCampaignOptions === null) return;
+        if (ivrCampaignOptions.some((c) => c.id === campaignId)) {
+            setCampaignIdInput(campaignId);
+        }
+    }, [campaignId, ivrCampaignOptions]);
+
+    useEffect(() => {
+        if (ivrCampaignOptions === null || !campaignIdInput) return;
+        const allowed = ivrCampaignOptions.some((c) => c.id === campaignIdInput);
+        if (!allowed) {
+            setCampaignIdInput('');
+            toast.info('El IVR Builder solo está disponible para campañas Blaster e Inbound.');
+        }
+    }, [ivrCampaignOptions, campaignIdInput]);
 
     // Load node types
     useEffect(() => {
@@ -587,9 +658,9 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
                         className="ivr-builder__campaign-select"
                     >
                         <option value="">Seleccionar campaña...</option>
-                        {campaigns.map((c) => (
+                        {(ivrCampaignOptions ?? []).map((c) => (
                             <option key={c.id} value={c.id}>
-                                {c.name || c.id}
+                                {c.id} — {c.name || c.id}
                             </option>
                         ))}
                     </select>
@@ -929,42 +1000,38 @@ export function IvrFlowBuilder({ campaignId, campaignName, onBack }: Props) {
 
             {/* Clone Dialog */}
             <Dialog open={cloneModalOpen} onOpenChange={setCloneModalOpen}>
-                <DialogContent>
+                <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>Clonar IVR</DialogTitle>
-                        <DialogDescription>
-                            Copia la configuración actual del IVR a otra campaña.
-                            <br />
-                            <span className="text-amber-500 font-bold">⚠️ Advertencia: Esto sobrescribirá el IVR existente en la campaña seleccionada.</span>
+                        <DialogDescription className="space-y-2 text-left">
+                            <span className="block">
+                                Copia la configuración actual del IVR a otra campaña.
+                            </span>
+                            <span className="block text-amber-600 dark:text-amber-500 font-semibold">
+                                ⚠️ Advertencia: esto sobrescribirá el IVR existente en la campaña seleccionada.
+                            </span>
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="grid gap-4 py-4">
-                        <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="target-campaign" className="text-right">
-                                Campaña Destino
-                            </Label>
-                            <Select
-                                value={targetCampaignId}
-                                onValueChange={setTargetCampaignId}
-                            >
-                                <SelectTrigger className="col-span-3">
-                                    <SelectValue placeholder="Seleccionar campaña..." />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {campaigns
-                                        .filter(c => c.id !== campaignIdInput)
-                                        .map((c) => (
-                                            <SelectItem key={c.id} value={c.id}>
-                                                {c.id} - {c.name}
-                                            </SelectItem>
-                                        ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                    <div className="flex flex-col gap-2 py-2">
+                        <Label htmlFor="target-campaign">Campaña destino</Label>
+                        <Select value={targetCampaignId} onValueChange={setTargetCampaignId}>
+                            <SelectTrigger id="target-campaign" className="w-full">
+                                <SelectValue placeholder="Seleccionar campaña..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {(ivrCampaignOptions ?? [])
+                                    .filter((c) => c.id !== campaignIdInput)
+                                    .map((c) => (
+                                        <SelectItem key={c.id} value={c.id}>
+                                            {c.id} — {c.name}
+                                        </SelectItem>
+                                    ))}
+                            </SelectContent>
+                        </Select>
                     </div>
 
-                    <DialogFooter>
+                    <DialogFooter className="gap-2 sm:gap-0">
                         <Button variant="outline" onClick={() => setCloneModalOpen(false)}>
                             Cancelar
                         </Button>

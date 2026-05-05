@@ -11,6 +11,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const redis = require('../config/redisClient');
 const { STATUS, IVR_OUTCOME, fromAsteriskState } = require('../config/callStatus');
+const { resolveInboundDid } = require('./routingResolveService');
 
 const TTS_CACHE = '/var/lib/asterisk/sounds/tts/piper';
 const TTS_API = process.env.PIPER_TTS_URL || 'http://127.0.0.1:5000/tts';
@@ -52,8 +53,9 @@ async function init(socketIo) {
         ari.on('ChannelDestroyed', handleGlobalChannelDestroyed);
         ari.on('ChannelStateChange', handleGlobalChannelStateChange);
 
-        ari.start('gescall-ivr');
-        console.log('[ARI] Stasis application "gescall-ivr" registered');
+        const supervisorApp = process.env.SUPERVISOR_ARI_STASIS_APP || 'gescall-supervisor';
+        ari.start(['gescall-ivr', supervisorApp]);
+        console.log(`[ARI] Stasis apps "gescall-ivr", "${supervisorApp}" registered`);
         
         // Start Queue Dispatcher
         if (!dispatcherInterval) {
@@ -79,6 +81,73 @@ async function getOrCreateBridge(campaignId) {
     } catch (err) {
         console.error(`[ARI] Failed to create bridge for campaign ${campaignId}:`, err.message);
         return null;
+    }
+}
+
+/**
+ * Encola el canal en el holding bridge de la campaña (predictivo/progresivo/entrante directo a cola).
+ */
+async function addChannelToCampaignBridge(channelId) {
+    const stateObj = activeCalls.get(channelId);
+    if (!stateObj || !stateObj.campaignId) {
+        console.log(`[ARI] Holding bridge omitido — sin campaña para canal ${channelId}`);
+        try {
+            await ari.channels.hangup({ channelId });
+        } catch (e) { /* ya cerrado */ }
+        return;
+    }
+
+    const { campaignId, campaignType, channel, mohClass, leadId } = stateObj;
+    console.log(`[ARI] ${campaignType} call ${channelId} sending to Holding Bridge`);
+    console.log(`[ARI] DEBUG mohClass="${mohClass}" mohCustomFile="${stateObj.mohCustomFile}" campaignId="${campaignId}"`);
+    const bridge = await getOrCreateBridge(campaignId);
+    console.log(`[ARI] DEBUG getOrCreateBridge returned: ${bridge ? 'bridge.id=' + bridge.id : 'NULL'}`);
+    if (!bridge) {
+        console.log(`[ARI] DEBUG bridge is NULL, hanging up`);
+        try {
+            await channel.hangup();
+        } catch (e) { /* */ }
+        return;
+    }
+    console.log(`[ARI] DEBUG calling bridge.addChannel for channel ${channelId} to bridge ${bridge.id}`);
+    try {
+        await Promise.race([
+            ari.bridges.addChannel({ bridgeId: bridge.id, channel: channelId }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Bridge addChannel timeout (10s)')), 10000))
+        ]);
+        console.log(`[ARI] DEBUG bridge.addChannel completed for channel ${channelId}`);
+    } catch (addErr) {
+        console.error(`[ARI] ERROR bridge.addChannel failed for channel ${channelId}: ${addErr.message}`);
+        try {
+            campaignBridges.delete(campaignId);
+            bridgeMohActive.delete(campaignId);
+            await ari.bridges.destroy({ bridgeId: bridge.id });
+        } catch (e) { /* ignore */ }
+        throw addErr;
+    }
+    if (!queueWaiters.has(campaignId)) queueWaiters.set(campaignId, []);
+    queueWaiters.get(campaignId).push({
+        channelId,
+        joinTime: Date.now(),
+        leadId,
+        phoneNumber: stateObj.phone || ''
+    });
+    stateObj.queued = true;
+    stateObj.dispatched = false;
+    try {
+        console.log(`[ARI] DEBUG bridgeMohActive=${bridgeMohActive.get(campaignId)} mohClass="${mohClass}"`);
+        if (!bridgeMohActive.get(campaignId)) {
+            if (mohClass) {
+                console.log(`[ARI] DEBUG calling bridge.startMoh with mohClass="${mohClass}"`);
+                await bridge.startMoh({ mohClass });
+                bridgeMohActive.set(campaignId, true);
+                console.log(`[ARI] Bridge MOH started with class "${mohClass}" for campaign ${campaignId}`);
+            } else {
+                console.log(`[ARI] DEBUG no mohClass set, using default holding bridge MOH`);
+            }
+        }
+    } catch (e) {
+        console.error(`[ARI] Failed to start MOH on bridge for ${campaignId}:`, e.message);
     }
 }
 
@@ -124,12 +193,21 @@ async function dispatchQueues() {
             }
             
             if (readyAgents.length === 0) continue;
-            
+
             // RRMemory: sort by longest waiting (oldest last_change)
             readyAgents.sort((a, b) => a.lastChange - b.lastChange);
-            const selectedAgent = readyAgents[0];
-            
-            // We have a waiter and an agent. 
+            // Releer Redis: si entró en pausa entre el escaneo y el dispatch, no originar
+            let selectedAgent = null;
+            for (const cand of readyAgents) {
+                const fresh = await redis.hGetAll(`gescall:agent:${cand.username}`);
+                if (fresh.state === 'READY') {
+                    selectedAgent = cand;
+                    break;
+                }
+            }
+            if (!selectedAgent) continue;
+
+            // We have a waiter and an agent.
             // Change agent state to prevent multiple calls
             await redis.hSet(`gescall:agent:${selectedAgent.username}`, 'state', 'RINGING');
             
@@ -326,6 +404,23 @@ async function handleStasisStart(event, channel) {
     const appArgs = event.args || [];
     console.log(`[ARI] StasisStart: channel=${channelId}, callerIdName=${callerIdName}, args=${JSON.stringify(appArgs)}`);
 
+    // Canales derivados de supervisión (ARI snoop) — no ejecutar flujo IVR
+    if (
+        appArgs.includes('supervisor_spy') ||
+        appArgs.includes('supervisor_whisper') ||
+        appArgs.includes('supervisor_monitor_leg')
+    ) {
+        try {
+            if (channel.state !== 'Up') {
+                await channel.answer();
+            }
+        } catch (e) {
+            console.warn(`[ARI] Supervisor snoop answer: ${e.message}`);
+        }
+        console.log(`[ARI] Supervisor snoop/watch channel ready (${appArgs.join(',')}) id=${channelId}`);
+        return;
+    }
+
     // If this is a dialed/transfer channel, do NOT run IVR flow on it — just log it
     if (appArgs.includes('dialed')) {
         console.log(`[ARI] Dialed channel ${channelId} entered Stasis — skipping IVR flow`);
@@ -355,10 +450,16 @@ async function handleStasisStart(event, channel) {
             const waiterVar = await channel.getChannelVar({ variable: 'waiter_channel' });
             if (waiterVar && waiterVar.value) {
                 const waiterChannelId = waiterVar.value;
+                const agentVarPrecall = await channel.getChannelVar({ variable: 'agent_username' });
+                const agentUserForRedis = agentVarPrecall?.value ? String(agentVarPrecall.value) : '';
+
                 const mixingBridge = await ari.bridges.create({ type: 'mixing' });
                 
                 mixingBridge.on('ChannelLeftBridge', async (event) => {
                     console.log(`[Queue] Channel ${event.channel?.id} left bridge ${mixingBridge.id}, tearing down.`);
+                    if (agentUserForRedis) {
+                        await redis.hDel(`gescall:agent:${agentUserForRedis}`, 'active_channel_id').catch(() => {});
+                    }
                     try { await ari.channels.hangup({ channelId: channelId }); } catch (e) {}
                     try { await ari.channels.hangup({ channelId: waiterChannelId }); } catch (e) {}
                     try { await ari.bridges.destroy({ bridgeId: mixingBridge.id }); } catch (e) {}
@@ -375,7 +476,10 @@ async function handleStasisStart(event, channel) {
                 // Update agent state to ON_CALL
                 const agentVar = await channel.getChannelVar({ variable: 'agent_username' });
                 if (agentVar && agentVar.value) {
-                    await redis.hSet(`gescall:agent:${agentVar.value}`, 'state', 'ON_CALL');
+                    await redis.hSet(`gescall:agent:${agentVar.value}`, {
+                        state: 'ON_CALL',
+                        active_channel_id: channelId,
+                    });
                 }
 
                 // Notify the agent's workspace which campaign this call belongs to.
@@ -455,33 +559,30 @@ async function handleStasisStart(event, channel) {
         let campaignType = '';
         let phoneNumber = '';
         let customVars = {};
+        let inboundDestinationType = null;
 
         try {
             const cTypeVar = await channel.getChannelVar({ variable: 'campaign_type' });
             if (cTypeVar && cTypeVar.value) campaignType = cTypeVar.value;
         } catch (e) { }
 
-        // --- INBOUND DID LOOKUP ---
+        // --- ENTRANTE: gescall_route_rules ---
         if (appArgs.includes('inbound')) {
             const didNumber = appArgs[1] || channel.dialplan.exten || '';
-            console.log(`[ARI] Inbound call received, looking up DID: ${didNumber}`);
+            console.log(`[ARI] Inbound call received, resolving DID: ${didNumber}`);
             try {
-                const pg = require('../config/pgDatabase');
-                const didRes = await pg.query(
-                    'SELECT campaign_id, trunk_id FROM gescall_inbound_dids WHERE did_number = $1 AND active = true LIMIT 1',
-                    [didNumber]
-                );
-                if (didRes.rows.length > 0) {
-                    campaignId = didRes.rows[0].campaign_id;
-                    const didTrunkId = didRes.rows[0].trunk_id;
+                const routeRow = await resolveInboundDid(didNumber, null);
+                if (routeRow) {
+                    campaignId = routeRow.destination_campaign_id;
                     campaignType = 'INBOUND';
-                    console.log(`[ARI] DID ${didNumber} mapped to Campaign ${campaignId}, Trunk ${didTrunkId}`);
-                    if (didTrunkId) customVars['trunk_id'] = didTrunkId;
+                    inboundDestinationType = routeRow.destination_type;
+                    console.log(`[ARI] Route rule #${routeRow.id}: DID ${didNumber} → campaign ${campaignId} (${inboundDestinationType})`);
+                    if (routeRow.trunk_id) customVars['trunk_id'] = routeRow.trunk_id;
                 } else {
-                    console.log(`[ARI] DID ${didNumber} not found or inactive`);
+                    console.log(`[ARI] DID ${didNumber}: sin regla de enrutamiento entrante activa`);
                 }
             } catch (err) {
-                console.error(`[ARI] Error looking up DID ${didNumber}:`, err.message);
+                console.error(`[ARI] Error resolving inbound DID ${didNumber}:`, err.message);
             }
         }
 
@@ -489,11 +590,9 @@ async function handleStasisStart(event, channel) {
             try {
                 const pgRows = await pg.query(
                     `SELECT l.list_id, l.comments, l.phone_number, l.first_name, l.last_name,
-                            l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id,
-                            camp.trunk_id
+                            l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id
                      FROM gescall_leads l
                      LEFT JOIN gescall_lists lst ON l.list_id = lst.list_id
-                     LEFT JOIN gescall_campaigns camp ON lst.campaign_id = camp.campaign_id
                      WHERE l.lead_id = $1 LIMIT 1`, [leadId]
                 );
 
@@ -512,7 +611,6 @@ async function handleStasisStart(event, channel) {
                     if (r.tts_vars && typeof r.tts_vars === 'object') {
                         customVars = { ...r.tts_vars };
                     }
-                    if (r.trunk_id) customVars['trunk_id'] = r.trunk_id;
                 }
 
                 if (campaignId) {
@@ -602,6 +700,9 @@ async function handleStasisStart(event, channel) {
             }
         }
 
+        const inboundQueueAfterIvr =
+            campaignType === 'INBOUND' && inboundDestinationType === 'IVR_THEN_QUEUE';
+
         // Store call state
         const stateObj = {
             channel,
@@ -628,6 +729,7 @@ async function handleStasisStart(event, channel) {
             mohClass,
             mohCustomFile,
             campaignType,
+            inboundQueueAfterIvr,
             queued: false,
             dispatched: false
         };
@@ -656,58 +758,23 @@ async function handleStasisStart(event, channel) {
         }
 
         // Execute flow or Queue
-        if (campaignType === 'OUTBOUND_PREDICTIVE' || campaignType === 'OUTBOUND_PROGRESSIVE' || campaignType === 'INBOUND') {
-            // Direct to Queue Holding Bridge
-            console.log(`[ARI] ${campaignType} call ${channelId} sending to Holding Bridge`);
-            console.log(`[ARI] DEBUG mohClass="${mohClass}" mohCustomFile="${mohCustomFile}" campaignId="${campaignId}"`);
-            const bridge = await getOrCreateBridge(campaignId);
-            console.log(`[ARI] DEBUG getOrCreateBridge returned: ${bridge ? 'bridge.id=' + bridge.id : 'NULL'}`);
-            if (bridge) {
-                console.log(`[ARI] DEBUG calling bridge.addChannel for channel ${channelId} to bridge ${bridge.id}`);
-                try {
-                    await Promise.race([
-                        ari.bridges.addChannel({ bridgeId: bridge.id, channel: channelId }),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('Bridge addChannel timeout (10s)')), 10000))
-                    ]);
-                    console.log(`[ARI] DEBUG bridge.addChannel completed for channel ${channelId}`);
-                } catch (addErr) {
-                    console.error(`[ARI] ERROR bridge.addChannel failed for channel ${channelId}: ${addErr.message}`);
-                    // Destroy the broken bridge so a fresh one gets created next time
-                    try { 
-                        campaignBridges.delete(campaignId);
-                        bridgeMohActive.delete(campaignId);
-                        await ari.bridges.destroy({ bridgeId: bridge.id }); 
-                    } catch (e) { /* ignore */ }
-                    throw addErr;
-                }
-                if (!queueWaiters.has(campaignId)) queueWaiters.set(campaignId, []);
-                queueWaiters.get(campaignId).push({ channelId, joinTime: Date.now(), leadId, phoneNumber: stateObj.phone || '' });
-                stateObj.queued = true;
-                stateObj.dispatched = false;
-                // Start MOH on the bridge (only once — the bridge keeps playing for all waiters)
-                try {
-                    console.log(`[ARI] DEBUG bridgeMohActive=${bridgeMohActive.get(campaignId)} mohClass="${mohClass}"`);
-                    if (!bridgeMohActive.get(campaignId)) {
-                        if (mohClass) {
-                            console.log(`[ARI] DEBUG calling bridge.startMoh with mohClass="${mohClass}"`);
-                            await bridge.startMoh({ mohClass });
-                            bridgeMohActive.set(campaignId, true);
-                            console.log(`[ARI] Bridge MOH started with class "${mohClass}" for campaign ${campaignId}`);
-                        } else {
-                            console.log(`[ARI] DEBUG no mohClass set, using default holding bridge MOH`);
-                        }
-                    }
-                } catch(e) {
-                    console.error(`[ARI] Failed to start MOH on bridge for ${campaignId}:`, e.message);
-                }
+        const predictiveOrProgressive =
+            campaignType === 'OUTBOUND_PREDICTIVE' || campaignType === 'OUTBOUND_PROGRESSIVE';
+        const inboundStraightToQueue =
+            campaignType === 'INBOUND' && !stateObj.inboundQueueAfterIvr;
+
+        if (predictiveOrProgressive || inboundStraightToQueue) {
+            await addChannelToCampaignBridge(channelId);
+        } else if (campaignType === 'INBOUND' && stateObj.inboundQueueAfterIvr) {
+            if (flow && flow.nodes && flow.edges) {
+                await executeFlow(channelId, flow);
             } else {
-                console.log(`[ARI] DEBUG bridge is NULL, hanging up`);
-                await channel.hangup();
+                console.warn(`[ARI] IVR_THEN_QUEUE sin flujo IVR activo (${campaignId}); enviando a cola`);
+                await addChannelToCampaignBridge(channelId);
             }
         } else if (flow && flow.nodes && flow.edges) {
             await executeFlow(channelId, flow);
         } else {
-            // Default flow: play TTS from comments, wait DTMF, transfer
             await executeDefaultFlow(channelId, comments, transferNumber);
         }
     } catch (err) {
@@ -1008,10 +1075,16 @@ async function executeFlow(channelId, flow) {
         currentNodeId = nextEdge ? nextEdge.target : null;
     }
 
-    // Flow ended without explicit hangup — hang up
+    // Flow ended without explicit hangup — cola entrante o colgar
     if (activeCalls.has(channelId)) {
+        const cs = activeCalls.get(channelId);
+        if (cs.inboundQueueAfterIvr && !cs.hungUp) {
+            console.log('[ARI] Flujo IVR terminado; enlazando a cola de campaña');
+            await addChannelToCampaignBridge(channelId);
+            return;
+        }
         try {
-            await callState.channel.hangup();
+            await cs.channel.hangup();
         } catch (e) { /* already gone */ }
     }
 }

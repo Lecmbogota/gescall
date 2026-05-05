@@ -35,6 +35,7 @@ import { AgentMonitorHeatmap } from "./AgentMonitorHeatmap";
 import { toast } from "sonner";
 import socketService from "../services/socket";
 import api from "@/services/api";
+import { useAuthStore } from "@/stores/authStore";
 
 const AGENT_STATE_MAP: Record<string, AgentStatus> = {
   READY: "available",
@@ -48,9 +49,28 @@ const AGENT_STATE_MAP: Record<string, AgentStatus> = {
   PAUSED: "paused",
   BREAK: "paused",
   NOT_READY: "paused",
+  PAUSE_PENDING: "paused",
   OFFLINE: "dead",
   UNKNOWN: "dead",
 };
+
+/** Incluye NOT_READY_BAÑO etc. que vienen en mayúsculas desde Redis. */
+function normalizeAgentMonitorStatus(state: string | undefined): AgentStatus {
+  if (!state) return "dead";
+  if (AGENT_STATE_MAP[state]) return AGENT_STATE_MAP[state];
+  const u = state.toUpperCase();
+  if (u.startsWith("NOT_READY")) return "paused";
+  return "dead";
+}
+
+function normalizeBackendAgentState(state: string | undefined): string {
+  if (!state) return "UNKNOWN";
+  const normalized = state.toUpperCase();
+  if (normalized === "INCALL") return "ON_CALL";
+  if (normalized === "WAITING") return "READY";
+  if (normalized.startsWith("NOT_READY")) return "NOT_READY";
+  return normalized;
+}
 
 export type AgentStatus =
   | "available"
@@ -83,6 +103,7 @@ export interface Agent {
   };
   pauseCode?: string;
   lastActivity: string;
+  backendState?: string;
   // Información adicional para el hover card
   additionalInfo?: {
     campaigns: string[];
@@ -93,6 +114,15 @@ export interface Agent {
     languages: string[];
     supervisor: string;
   };
+}
+
+export type SupervisorAction = "spy" | "whisper" | "force-ready" | "remote-logout";
+
+export interface AgentMonitorActionHandlers {
+  canManageSupervisorActions: boolean;
+  getLoadingAction: (agentUsername?: string) => SupervisorAction | null;
+  canSpyOrWhisper: (agent: Agent) => boolean;
+  onAction: (agent: Agent, action: SupervisorAction) => Promise<void>;
 }
 
 interface AgentMonitorProps {
@@ -336,7 +366,8 @@ function mapApiAgent(api: any): Agent {
     name: api.full_name || api.username,
     username: api.username,
     extension: api.sip_extension || 'N/A',
-    status: AGENT_STATE_MAP[api.agent_state] || 'dead',
+    status: normalizeAgentMonitorStatus(api.agent_state),
+    backendState: normalizeBackendAgentState(api.agent_state),
     campaign: api.campaigns?.[0]?.name || 'N/A',
     timeInStatus: api.last_change ? Math.floor((Date.now() - api.last_change) / 1000) : 0,
     todayStats: { calls: 0, talkTime: 0, pauseTime: 0, loginTime: 0 },
@@ -345,12 +376,126 @@ function mapApiAgent(api: any): Agent {
 }
 
 export function AgentMonitor({ username }: AgentMonitorProps) {
+  const session = useAuthStore((state) => state.session);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [viewMode, setViewMode] = useState<"grid" | "list" | "heatmap">("grid");
+  const [loadingActionsByUser, setLoadingActionsByUser] = useState<
+    Record<string, SupervisorAction | null>
+  >({});
+
+  const canManageSupervisorActions = (() => {
+    if (!session?.user) return false;
+    if (session.user.is_system === true) return true;
+    const granted = session.permissions?.granted ?? [];
+    return granted.includes("manage_agent_workspace") || granted.includes("admin");
+  })();
+
+  const getLoadingAction = (agentUsername?: string): SupervisorAction | null => {
+    if (!agentUsername) return null;
+    return loadingActionsByUser[agentUsername] ?? null;
+  };
+
+  const canSpyOrWhisper = (agent: Agent): boolean => {
+    return normalizeBackendAgentState(agent.backendState) === "ON_CALL";
+  };
+
+  const refreshAgentsSnapshot = async () => {
+    const result = await api.getLoggedInAgents();
+    if (result.success && Array.isArray(result.data)) {
+      setAgents(result.data.map(mapApiAgent));
+    }
+  };
+
+  const supervisorActionErrorMessage = (
+    error: unknown,
+    action: SupervisorAction,
+  ): string => {
+    const e = error as { message?: string; code?: string; status?: number };
+    const code = e?.code;
+    const status = e?.status;
+    const fallback = e?.message || "Error al ejecutar la acción";
+
+    if (action === "spy" || action === "whisper") {
+      if (
+        code === "SUPERVISOR_ENDPOINT_MISSING" ||
+        status === 412
+      ) {
+        return "Tu usuario supervisor no tiene extensión SIP en el sistema o falta configuración en el servidor (SUPERVISOR_MONITOR_ENDPOINT). Pide que te asignen una extensión o configuren el endpoint.";
+      }
+      if (code === "ARI_UNAVAILABLE" || status === 503) {
+        return "El conmutador (ARI) no está disponible. Comprueba Asterisk y reintenta.";
+      }
+      if (
+        code === "SUPERVISOR_ATTACH_FAILED" ||
+        code === "SUPERVISOR_MONITOR_ORIGINATE_FAILED" ||
+        code === "SNOOP_FAILED" ||
+        code === "SNOOP_EMPTY" ||
+        status === 502
+      ) {
+        return "No se pudo establecer la sesión de escucha/susurro con el PBX. Revisa conectividad, permisos ARI y dialplan/extensión del supervisor.";
+      }
+      if (code === "AGENT_CHANNEL_NOT_FOUND" || code === "SIP_EXTENSION_MISSING") {
+        return "No se localiza el canal del agente en Asterisk. Comprueba extensión del agente o que la llamada esté activa en la cola.";
+      }
+      if (code === "SUPERVISION_NEEDS_ON_CALL" || status === 409) {
+        return "Esta acción solo aplica cuando el agente está en llamada.";
+      }
+    }
+
+    if (action === "force-ready") {
+      if (status === 409 && code === "FORCE_READY_ON_CALL") {
+        return "No se puede pasar a disponible mientras el agente está en llamada.";
+      }
+    }
+
+    if (action === "remote-logout") {
+      if (code === "LOGOUT_REJECTED_ON_CALL") {
+        return "Logout remoto no permitido con el agente en llamada salvo configurar política en el servidor.";
+      }
+    }
+
+    return fallback;
+  };
+
+  const runSupervisorAction = async (agent: Agent, action: SupervisorAction) => {
+    if (!agent.username) {
+      toast.error("El agente no tiene username válido");
+      return;
+    }
+
+    if ((action === "spy" || action === "whisper") && !canSpyOrWhisper(agent)) {
+      toast.error("Solo disponible cuando el agente está ON_CALL");
+      return;
+    }
+
+    setLoadingActionsByUser((prev) => ({ ...prev, [agent.username!]: action }));
+
+    try {
+      if (action === "spy") {
+        await api.supervisorSpyAgent(agent.username);
+        toast.success(`Escucha iniciada sobre ${agent.name}`);
+      } else if (action === "whisper") {
+        await api.supervisorWhisperAgent(agent.username);
+        toast.success(`Susurro iniciado con ${agent.name}`);
+      } else if (action === "force-ready") {
+        await api.supervisorForceReadyAgent(agent.username);
+        toast.success(`${agent.name} forzado a estado READY`);
+      } else {
+        await api.supervisorRemoteLogoutAgent(agent.username);
+        toast.success(`Logout remoto ejecutado para ${agent.name}`);
+      }
+
+      await refreshAgentsSnapshot();
+    } catch (error: unknown) {
+      toast.error(supervisorActionErrorMessage(error, action));
+    } finally {
+      setLoadingActionsByUser((prev) => ({ ...prev, [agent.username!]: null }));
+    }
+  };
 
   // Fetch initial agent data from REST API
   useEffect(() => {
@@ -382,11 +527,12 @@ export function AgentMonitor({ username }: AgentMonitorProps) {
         const upd = data.agent_update;
         setAgents(prev => prev.map(agent => {
           if (agent.username === upd.username) {
-            const newStatus = AGENT_STATE_MAP[upd.state] || 'dead';
+            const newStatus = normalizeAgentMonitorStatus(upd.state);
             const now = Date.now();
             return {
               ...agent,
               status: newStatus,
+              backendState: normalizeBackendAgentState(upd.state),
               timeInStatus: 0,
               lastActivity: new Date(now).toISOString(),
             };
@@ -400,10 +546,11 @@ export function AgentMonitor({ username }: AgentMonitorProps) {
         setAgents(prev => prev.map(agent => {
           const upd = data.agents.find((a: any) => a.username === agent.username);
           if (upd) {
-            const newStatus = AGENT_STATE_MAP[upd.state] || 'dead';
+            const newStatus = normalizeAgentMonitorStatus(upd.state);
             return {
               ...agent,
               status: newStatus,
+              backendState: normalizeBackendAgentState(upd.state),
               timeInStatus: 0,
               lastActivity: new Date().toISOString(),
             };
@@ -694,7 +841,15 @@ export function AgentMonitor({ username }: AgentMonitorProps) {
 
           {viewMode === "list" && (
             <div className="pb-6">
-              <AgentMonitorList agents={filteredAgents} />
+              <AgentMonitorList
+                agents={filteredAgents}
+                actionHandlers={{
+                  canManageSupervisorActions,
+                  getLoadingAction,
+                  canSpyOrWhisper,
+                  onAction: runSupervisorAction,
+                }}
+              />
             </div>
           )}
 

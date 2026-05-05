@@ -6,6 +6,17 @@ const redis = require('../config/redisClient');
 const pgDatabaseService = require('../services/pgDatabaseService');
 const { resolveDisposition, matchDispositionConditions: matchConds } = require('../utils/dispositionUtils');
 
+function emitWorkspaceRefresh(req, payload = {}) {
+    try {
+        const io = req.app.get('io');
+        if (io && typeof io.emit === 'function') {
+            io.emit('agent:workspace:refresh', { ...payload, at: new Date().toISOString() });
+        }
+    } catch (_) {
+        // ignore socket emission errors
+    }
+}
+
 // ─── Disposition Cache (in-memory, TTL 5 min) ──────────────────────
 const dispositionCache = new Map(); // campaignId -> { fetchedAt, rows }
 const DISPOSITION_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -58,6 +69,102 @@ const DEFAULT_DISPOSITIONS = [
       conditions: { call_status: ['SALE'], lead_status: ['SALE'] } },
 ];
 
+const CAMPAIGN_TYPES_WITH_PAUSES = new Set(['INBOUND', 'OUTBOUND_PROGRESSIVE', 'OUTBOUND_PREDICTIVE']);
+const DEFAULT_TELEPROMPTER_DAYPARTS = {
+    day: 'día',
+    afternoon: 'tarde',
+    night: 'noche',
+    day_start: 6,
+    day_end: 11,
+    afternoon_start: 12,
+    afternoon_end: 18,
+    night_start: 19,
+    night_end: 5,
+};
+let teleprompterColumnsEnsured = false;
+const DEFAULT_PAUSE_SETTINGS = {
+    not_ready: { enabled: true, limit_seconds: 600, label: 'No disponible' },
+    not_ready_bano: { enabled: true, limit_seconds: 900, label: 'Pausa - Baño' },
+    not_ready_almuerzo: { enabled: true, limit_seconds: 1800, label: 'Pausa - Almuerzo' },
+    not_ready_backoffice: { enabled: true, limit_seconds: 900, label: 'Pausa - Backoffice' },
+    not_ready_capacitacion: { enabled: true, limit_seconds: 3600, label: 'Pausa - Capacitación' },
+};
+const PAUSE_SETTING_KEYS = Object.keys(DEFAULT_PAUSE_SETTINGS);
+
+function humanizePauseKey(key) {
+    const base = String(key || '')
+        .toLowerCase()
+        .replace(/^not_ready_?/, '')
+        .replace(/_/g, ' ')
+        .trim();
+    if (!base) return 'Pausa';
+    return base.charAt(0).toUpperCase() + base.slice(1);
+}
+
+function isValidPauseKey(key) {
+    const s = String(key || '').trim().toLowerCase();
+    return s === 'not_ready' || /^not_ready_[a-z0-9_]{2,60}$/.test(s);
+}
+
+function normalizePauseSettings(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const out = {};
+    const incomingKeys = Object.keys(src).filter(isValidPauseKey);
+    const keys = Array.from(new Set([...PAUSE_SETTING_KEYS, ...incomingKeys]));
+    for (const key of keys) {
+        const base = DEFAULT_PAUSE_SETTINGS[key] || { enabled: true, limit_seconds: 600, label: humanizePauseKey(key) };
+        const incoming = src[key] && typeof src[key] === 'object' ? src[key] : {};
+        const enabled = typeof incoming.enabled === 'boolean' ? incoming.enabled : base.enabled;
+        let limit = Number.isFinite(Number(incoming.limit_seconds))
+            ? Math.floor(Number(incoming.limit_seconds))
+            : base.limit_seconds;
+        if (limit < 15) limit = 15;
+        if (limit > 8 * 3600) limit = 8 * 3600;
+        const labelRaw = typeof incoming.label === 'string' ? incoming.label.trim() : '';
+        const label = (labelRaw || base.label || humanizePauseKey(key)).slice(0, 80);
+        out[key] = {
+            enabled,
+            limit_seconds: limit,
+            label,
+        };
+    }
+    return out;
+}
+
+function normalizeTeleprompterDayparts(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const toHour = (v, fallback) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(0, Math.min(23, Math.floor(n)));
+    };
+    return {
+        day: typeof src.day === 'string' && src.day.trim() ? src.day.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.day,
+        afternoon: typeof src.afternoon === 'string' && src.afternoon.trim() ? src.afternoon.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.afternoon,
+        night: typeof src.night === 'string' && src.night.trim() ? src.night.trim() : DEFAULT_TELEPROMPTER_DAYPARTS.night,
+        day_start: toHour(src.day_start, DEFAULT_TELEPROMPTER_DAYPARTS.day_start),
+        day_end: toHour(src.day_end, DEFAULT_TELEPROMPTER_DAYPARTS.day_end),
+        afternoon_start: toHour(src.afternoon_start, DEFAULT_TELEPROMPTER_DAYPARTS.afternoon_start),
+        afternoon_end: toHour(src.afternoon_end, DEFAULT_TELEPROMPTER_DAYPARTS.afternoon_end),
+        night_start: toHour(src.night_start, DEFAULT_TELEPROMPTER_DAYPARTS.night_start),
+        night_end: toHour(src.night_end, DEFAULT_TELEPROMPTER_DAYPARTS.night_end),
+    };
+}
+
+async function ensureTeleprompterColumns() {
+    if (teleprompterColumnsEnsured) return;
+    await pg.query(`
+        ALTER TABLE gescall_campaigns
+        ADD COLUMN IF NOT EXISTS teleprompter_template TEXT NOT NULL DEFAULT '';
+    `);
+    await pg.query(`
+        ALTER TABLE gescall_campaigns
+        ADD COLUMN IF NOT EXISTS teleprompter_dayparts JSONB NOT NULL
+        DEFAULT '{"day":"día","afternoon":"tarde","night":"noche","day_start":6,"day_end":11,"afternoon_start":12,"afternoon_end":18,"night_start":19,"night_end":5}'::jsonb;
+    `);
+    teleprompterColumnsEnsured = true;
+}
+
 async function seedDefaultDispositions(campaignId) {
     for (const d of DEFAULT_DISPOSITIONS) {
         await pg.query(
@@ -73,7 +180,11 @@ async function seedDefaultDispositions(campaignId) {
 router.get('/', async (req, res) => {
     try {
         const { campaign_id, allowed_campaigns } = req.query;
-        let query = 'SELECT c.*, (SELECT COUNT(*) FROM gescall_user_campaigns a WHERE a.campaign_id = c.campaign_id) as agent_count FROM gescall_campaigns c';
+        let query = `SELECT c.*,
+            (SELECT COUNT(*)::int FROM gescall_user_campaigns a WHERE a.campaign_id = c.campaign_id) as agent_count,
+            EXISTS (SELECT 1 FROM gescall_dnc d WHERE d.campaign_id IS NULL) AS global_dnc_exists,
+            EXISTS (SELECT 1 FROM gescall_dnc d WHERE d.campaign_id = c.campaign_id) AS campaign_dnc_exists
+            FROM gescall_campaigns c`;
         let params = [];
 
         if (campaign_id) {
@@ -94,7 +205,9 @@ router.get('/', async (req, res) => {
             ...row,
             active: row.active ? 'Y' : 'N',
             archived: row.archived || false,
-            agent_count: parseInt(row.agent_count) || 0
+            agent_count: parseInt(row.agent_count) || 0,
+            global_dnc_exists: row.global_dnc_exists ? 1 : 0,
+            campaign_dnc_exists: row.campaign_dnc_exists ? 1 : 0
         }));
         res.json({ success: true, data: mappedRows });
     } catch (error) {
@@ -271,14 +384,16 @@ router.get('/:campaign_id/stats', async (req, res) => {
                 lead_structure_schema: campQuery.rows[0].lead_structure_schema || [],
                 alt_phone_enabled: campQuery.rows[0].alt_phone_enabled || false,
                 campaign_type: campQuery.rows[0].campaign_type || 'BLASTER',
-                trunk_id: campQuery.rows[0].trunk_id || null,
                 moh_class: campQuery.rows[0].moh_class || null,
                 moh_custom_file: campQuery.rows[0].moh_custom_file || null,
                 predictive_target_drop_rate: parseFloat(campQuery.rows[0].predictive_target_drop_rate) || 0.03,
                 predictive_min_factor: parseFloat(campQuery.rows[0].predictive_min_factor) || 1.0,
                 predictive_max_factor: parseFloat(campQuery.rows[0].predictive_max_factor) || 4.0,
                 dial_schedule: campQuery.rows[0].dial_schedule || null,
-                schedule_template_id: campQuery.rows[0].schedule_template_id || null
+                schedule_template_id: campQuery.rows[0].schedule_template_id || null,
+                teleprompter_template: campQuery.rows[0].teleprompter_template || '',
+                teleprompter_dayparts: normalizeTeleprompterDayparts(campQuery.rows[0].teleprompter_dayparts),
+                pause_settings: normalizePauseSettings(campQuery.rows[0].pause_settings),
             }
         });
     } catch (error) {
@@ -556,28 +671,12 @@ router.put('/:campaign_id/dial-level', async (req, res) => {
     }
 });
 
-// ==================== CAMPAIGN TRUNK ====================
-
-router.put('/:campaign_id/trunk', async (req, res) => {
-    try {
-        const { campaign_id } = req.params;
-        const { trunk_id } = req.body;
-
-        console.log(`[pg_campaigns] Updating campaign ${campaign_id} trunk to: ${trunk_id}`);
-        await pg.query(
-            'UPDATE gescall_campaigns SET trunk_id = $1 WHERE campaign_id = $2',
-            [trunk_id || null, campaign_id]
-        );
-
-        res.json({
-            success: true,
-            message: `Troncal actualizada`,
-            trunk_id
-        });
-    } catch (error) {
-        console.error('[pg_campaigns] Trunk Update Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
+// CAMPAIGN TRUNK — eliminado. Se gestiona en /api/routing/rules (direction=OUTBOUND).
+router.put('/:campaign_id/trunk', (_req, res) => {
+    res.status(410).json({
+        success: false,
+        error: 'Endpoint retirado. Configura la troncal en Sistema → Enrutamiento (rutas salientes).',
+    });
 });
 
 // ==================== CAMPAIGN RETRIES LEVEL ====================
@@ -604,6 +703,47 @@ router.put('/:campaign_id/retries', async (req, res) => {
         });
     } catch (error) {
         console.error('[pg_campaigns] Max Retries Update Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== AGENT WORKSPACE DAILY TARGET ====================
+
+router.put('/:campaign_id/workspace-daily-target', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const rawTarget = req.body?.workspace_daily_target;
+        const workspaceDailyTarget = parseInt(rawTarget, 10);
+
+        if (!Number.isInteger(workspaceDailyTarget) || workspaceDailyTarget < 1 || workspaceDailyTarget > 100000) {
+            return res.status(400).json({
+                success: false,
+                error: 'workspace_daily_target debe ser un entero entre 1 y 100000',
+            });
+        }
+
+        console.log(`[pg_campaigns] Updating campaign ${campaign_id} workspace_daily_target to: ${workspaceDailyTarget}`);
+        const updateRes = await pg.query(
+            'UPDATE gescall_campaigns SET workspace_daily_target = $1 WHERE campaign_id = $2 RETURNING campaign_id, workspace_daily_target',
+            [workspaceDailyTarget, campaign_id]
+        );
+
+        if (!updateRes.rows.length) {
+            return res.status(404).json({ success: false, error: 'Campaign not found' });
+        }
+
+        res.json({
+            success: true,
+            message: `Meta diaria del workspace actualizada a ${workspaceDailyTarget}`,
+            data: updateRes.rows[0],
+        });
+        emitWorkspaceRefresh(req, {
+            type: 'goal_target_updated',
+            campaign_id,
+            workspace_daily_target: workspaceDailyTarget,
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] Workspace Daily Target Update Error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -821,6 +961,151 @@ router.put('/:campaign_id/predictive', async (req, res) => {
         res.json({ success: true, message: 'Configuración predictiva actualizada' });
     } catch (error) {
         console.error('[pg_campaigns] Predictive settings error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== TELEPROMPTER SCRIPT ====================
+router.put('/:campaign_id/teleprompter-script', async (req, res) => {
+    try {
+        await ensureTeleprompterColumns();
+        const { campaign_id } = req.params;
+        const template = typeof req.body?.template === 'string' ? req.body.template.trim() : '';
+        const { rows: typeRows } = await pg.query(
+            'SELECT campaign_type FROM gescall_campaigns WHERE campaign_id = $1',
+            [campaign_id]
+        );
+        if (!typeRows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+        const campaignType = typeRows[0].campaign_type;
+        const allowedTypes = new Set(['INBOUND', 'OUTBOUND_PREDICTIVE', 'OUTBOUND_PROGRESSIVE']);
+        if (!allowedTypes.has(campaignType)) {
+            return res.status(400).json({
+                success: false,
+                error: 'El script de teleprompter solo aplica a campañas Inbound, Predictiva o Progresiva',
+            });
+        }
+
+        if (template.length > 12000) {
+            return res.status(400).json({
+                success: false,
+                error: 'El script del teleprompter excede el máximo permitido (12000 caracteres)',
+            });
+        }
+
+        const { rows } = await pg.query(
+            `UPDATE gescall_campaigns
+             SET teleprompter_template = $1
+             WHERE campaign_id = $2
+             RETURNING campaign_id, teleprompter_template`,
+            [template, campaign_id]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Script de teleprompter actualizado',
+            data: rows[0],
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] teleprompter-script error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.put('/:campaign_id/teleprompter-dayparts', async (req, res) => {
+    try {
+        await ensureTeleprompterColumns();
+        const { campaign_id } = req.params;
+        const { rows: typeRows } = await pg.query(
+            'SELECT campaign_type FROM gescall_campaigns WHERE campaign_id = $1',
+            [campaign_id]
+        );
+        if (!typeRows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+        const campaignType = typeRows[0].campaign_type;
+        if (!CAMPAIGN_TYPES_WITH_PAUSES.has(campaignType)) {
+            return res.status(400).json({
+                success: false,
+                error: 'La configuración día/tarde/noche solo aplica a campañas Inbound, Progresiva y Predictiva',
+            });
+        }
+
+        const normalized = normalizeTeleprompterDayparts(req.body?.dayparts);
+        const { rows } = await pg.query(
+            `UPDATE gescall_campaigns
+             SET teleprompter_dayparts = $1::jsonb
+             WHERE campaign_id = $2
+             RETURNING campaign_id, teleprompter_dayparts`,
+            [JSON.stringify(normalized), campaign_id]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Configuración día/tarde/noche actualizada',
+            data: {
+                campaign_id: rows[0].campaign_id,
+                teleprompter_dayparts: normalizeTeleprompterDayparts(rows[0].teleprompter_dayparts),
+            },
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] teleprompter-dayparts error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== PAUSE SETTINGS ====================
+router.put('/:campaign_id/pause-settings', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const pause_settings = req.body?.pause_settings;
+        if (!pause_settings || typeof pause_settings !== 'object') {
+            return res.status(400).json({ success: false, error: 'pause_settings debe ser un objeto' });
+        }
+
+        const { rows: typeRows } = await pg.query(
+            'SELECT campaign_type FROM gescall_campaigns WHERE campaign_id = $1',
+            [campaign_id]
+        );
+        if (!typeRows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+        const campaignType = typeRows[0].campaign_type;
+        if (!CAMPAIGN_TYPES_WITH_PAUSES.has(campaignType)) {
+            return res.status(400).json({
+                success: false,
+                error: 'La configuración de pausas solo aplica a campañas Inbound, Progresiva y Predictiva',
+            });
+        }
+
+        const normalized = normalizePauseSettings(pause_settings);
+        const { rows } = await pg.query(
+            `UPDATE gescall_campaigns
+             SET pause_settings = $1::jsonb
+             WHERE campaign_id = $2
+             RETURNING campaign_id, pause_settings`,
+            [JSON.stringify(normalized), campaign_id]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+        }
+        res.json({
+            success: true,
+            message: 'Configuración de pausas actualizada',
+            data: {
+                campaign_id: rows[0].campaign_id,
+                pause_settings: normalizePauseSettings(rows[0].pause_settings),
+            },
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] pause-settings error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

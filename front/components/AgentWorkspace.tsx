@@ -4,7 +4,7 @@ import { TeleprompterWidget } from './TeleprompterWidget';
 import { useTeleprompterSettings } from '../hooks/useTeleprompterSettings';
 import socketService from '../services/socket';
 import { StickyNotesWidget } from './StickyNotesWidget';
-import GoalsWidget from './GoalsWidget';
+import GoalsWidget, { AgentGoalRow } from './GoalsWidget';
 import { useWebPhone } from '../hooks/useWebPhone';
 import { FloatingTeleprompter } from './FloatingTeleprompter';
 import AnimatedList from './AnimatedList';
@@ -19,6 +19,84 @@ const AVAILABLE_WIDGETS = [
   { id: 'ranking', label: 'Ranking (Leaderboard)', icon: <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></>, color: 'text-amber-500' },
   { id: 'teleprompter', label: 'Teleprompter Dinámico', icon: <><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="5" x2="19" y2="19"/></>, color: 'text-yellow-500' },
 ];
+
+const splitTeleprompterTemplate = (template: string) =>
+  (template || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+const normalizeTemplateVars = (template: string, vars: Record<string, string>) =>
+  (template || '').replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_m, rawKey: string) => {
+    const key = String(rawKey || '').trim();
+    if (!key) return '';
+    return vars[key] ?? `{{${key}}}`;
+  });
+
+const normalizeTeleprompterDayparts = (raw?: any) => {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const toHour = (v: any, fallback: number) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(23, Math.floor(n)));
+  };
+  return {
+    day: typeof src.day === 'string' && src.day.trim() ? src.day.trim() : 'día',
+    afternoon: typeof src.afternoon === 'string' && src.afternoon.trim() ? src.afternoon.trim() : 'tarde',
+    night: typeof src.night === 'string' && src.night.trim() ? src.night.trim() : 'noche',
+    day_start: toHour(src.day_start, 6),
+    day_end: toHour(src.day_end, 11),
+    afternoon_start: toHour(src.afternoon_start, 12),
+    afternoon_end: toHour(src.afternoon_end, 18),
+    night_start: toHour(src.night_start, 19),
+    night_end: toHour(src.night_end, 5),
+  };
+};
+
+function parseLeadTtsVars(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw == null) return out;
+  let obj: any = raw;
+  if (typeof raw === 'string') {
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return out;
+    }
+  }
+  if (typeof obj !== 'object' || obj === null) return out;
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'object') continue;
+    out[String(k)] = String(v);
+  }
+  return out;
+}
+
+const DEFAULT_PAUSE_CONFIG: Record<string, { label: string; limit: number; icon?: string }> = {
+  'not_ready': { label: 'No Disponible', limit: 600 },
+  'not_ready_bano': { label: 'Pausa - Baño', limit: 900, icon: 'M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' },
+  'not_ready_almuerzo': { label: 'Pausa - Almuerzo', limit: 1800, icon: 'M18 8h1a4 4 0 0 1 0 8h-1M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8zM6 1v3M10 1v3M14 1v3' },
+  'not_ready_backoffice': { label: 'Pausa - Backoffice', limit: 900, icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' },
+  'not_ready_capacitacion': { label: 'Pausa - Capacitación', limit: 3600, icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' },
+};
+
+function normalizePauseConfig(raw?: any) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out: Record<string, { name: string; limit: number; icon?: string; enabled: boolean }> = {} as any;
+  const incomingKeys = Object.keys(src).filter((k) => k === 'not_ready' || /^not_ready_[a-z0-9_]{2,60}$/i.test(k));
+  const keys = Array.from(new Set([...Object.keys(DEFAULT_PAUSE_CONFIG), ...incomingKeys]));
+  for (const id of keys) {
+    const def = DEFAULT_PAUSE_CONFIG[id] || { label: id.replace(/^not_ready_?/, '').replace(/_/g, ' ') || 'Pausa', limit: 900 };
+    const row = src[id] && typeof src[id] === 'object' ? src[id] : {};
+    const enabled = typeof row.enabled === 'boolean' ? row.enabled : true;
+    const n = Number(row.limit_seconds);
+    const limit = Number.isFinite(n) ? Math.max(15, Math.min(28800, Math.floor(n))) : def.limit;
+    const rowLabel = typeof row.label === 'string' && row.label.trim() ? row.label.trim() : def.label;
+    out[id] = { name: rowLabel, limit, icon: def.icon, enabled };
+  }
+  return out;
+}
 
 export const AgentWorkspace: React.FC = () => {
   const { session, logout } = useAuthStore();
@@ -69,16 +147,411 @@ export const AgentWorkspace: React.FC = () => {
     return raw.map((c: any) => typeof c === 'string' ? c : c.id).filter(Boolean);
   }, [session]);
   const agentUsername = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
+  const [campaignName, setCampaignName] = useState<string>('');
+  const [campaignTeleprompterTemplate, setCampaignTeleprompterTemplate] = useState<string>('');
+  const [campaignTeleprompterDayparts, setCampaignTeleprompterDayparts] = useState(() => normalizeTeleprompterDayparts());
+  const [assignedLeadVars, setAssignedLeadVars] = useState<Record<string, string>>({});
+  const [crmLeadDetail, setCrmLeadDetail] = useState<Record<string, unknown> | null>(null);
+  const [crmLeadLoading, setCrmLeadLoading] = useState(false);
+  const [campaignPauseConfig, setCampaignPauseConfig] = useState(() => normalizePauseConfig());
+  const activeCampaignId = selectedCampaignId || agentCampaigns[0] || '';
+
+  const loadAgentWorkspaceLead = React.useCallback(async (leadId: string) => {
+    const id = parseInt(String(leadId), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      setCrmLeadDetail(null);
+      return;
+    }
+    setCrmLeadLoading(true);
+    try {
+      const res: any = await api.getAgentWorkspaceLead(String(id));
+      if (res?.success && res?.data) setCrmLeadDetail(res.data as Record<string, unknown>);
+      else setCrmLeadDetail(null);
+    } catch {
+      setCrmLeadDetail(null);
+    } finally {
+      setCrmLeadLoading(false);
+    }
+  }, []);
 
   const [agentCampaignType, setAgentCampaignType] = useState<string | null>(null);
   React.useEffect(() => {
-    if (agentCampaigns.length > 0) {
-      api.getCampaignById(agentCampaigns[0]).then((res: any) => {
-        if (res?.data?.campaign_type) setAgentCampaignType(res.data.campaign_type);
+    if (activeCampaignId) {
+      api.getCampaignById(activeCampaignId).then((res: any) => {
+        const row = Array.isArray(res?.data) ? res.data[0] : res?.data;
+        if (row?.campaign_type) setAgentCampaignType(row.campaign_type);
+        if (row?.campaign_name) setCampaignName(row.campaign_name);
+        if (typeof row?.teleprompter_template === 'string') {
+          setCampaignTeleprompterTemplate(row.teleprompter_template);
+        } else {
+          setCampaignTeleprompterTemplate('');
+        }
+        setCampaignTeleprompterDayparts(normalizeTeleprompterDayparts(row?.teleprompter_dayparts));
+        setCampaignPauseConfig(normalizePauseConfig(row?.pause_settings));
       }).catch(() => {});
     }
-  }, [agentCampaigns[0]]);
-  
+  }, [activeCampaignId]);
+
+  const teleprompterSegments = React.useMemo(() => {
+    const hour = new Date().getHours();
+    const isWithinRange = (h: number, start: number, end: number) => {
+      if (start <= end) return h >= start && h <= end;
+      return h >= start || h <= end;
+    };
+    const timePeriod =
+      isWithinRange(hour, campaignTeleprompterDayparts.day_start, campaignTeleprompterDayparts.day_end)
+        ? campaignTeleprompterDayparts.day
+        : isWithinRange(hour, campaignTeleprompterDayparts.afternoon_start, campaignTeleprompterDayparts.afternoon_end)
+          ? campaignTeleprompterDayparts.afternoon
+          : isWithinRange(hour, campaignTeleprompterDayparts.night_start, campaignTeleprompterDayparts.night_end)
+            ? campaignTeleprompterDayparts.night
+            : campaignTeleprompterDayparts.night;
+
+    const row = crmLeadDetail;
+    const tts = row ? parseLeadTtsVars(row.tts_vars) : {};
+    const merged: Record<string, string> = { ...tts, ...assignedLeadVars };
+    const fn = (row?.first_name != null && String(row.first_name).trim()) || merged.first_name || merged.nombre || '';
+    const ln = (row?.last_name != null && String(row.last_name).trim()) || merged.last_name || merged.apellido || '';
+    const resolvedCustomer =
+      [fn, ln].filter(Boolean).join(' ').trim() ||
+      merged.customer_name ||
+      merged.name ||
+      merged.nombre_completo ||
+      'cliente';
+
+    const withVars = normalizeTemplateVars(campaignTeleprompterTemplate || '', {
+      agent_name: agentUsername,
+      time_period: timePeriod,
+      campaign_name: campaignName || activeCampaignId || '',
+      phone_number: callerId || phoneNumber || merged.phone_number || merged.phone || '',
+      customer_name: merged.customer_name || merged.nombre || merged.name || resolvedCustomer,
+      balance: merged.balance || merged.saldo || 'pendiente',
+      due_date: merged.due_date || merged.fecha_limite || 'por confirmar',
+      ...merged,
+    });
+    return splitTeleprompterTemplate(withVars);
+  }, [
+    campaignTeleprompterTemplate,
+    campaignTeleprompterDayparts,
+    agentUsername,
+    campaignName,
+    activeCampaignId,
+    callerId,
+    phoneNumber,
+    assignedLeadVars,
+    crmLeadDetail,
+  ]);
+
+  const crmSnapshot = React.useMemo(() => {
+    const row = crmLeadDetail;
+    const tts = row ? parseLeadTtsVars(row.tts_vars) : {};
+    const merged: Record<string, string> = { ...tts, ...assignedLeadVars };
+    const phone =
+      (row?.phone_number != null && String(row.phone_number)) ||
+      merged.phone_number ||
+      merged.phone ||
+      callerId ||
+      phoneNumber ||
+      '';
+    const fn = (row?.first_name != null && String(row.first_name).trim()) || merged.first_name || merged.nombre || '';
+    const ln = (row?.last_name != null && String(row.last_name).trim()) || merged.last_name || merged.apellido || '';
+    let displayName = [fn, ln].filter(Boolean).join(' ').trim();
+    if (!displayName) {
+      displayName =
+        merged.customer_name ||
+        merged.name ||
+        merged.nombre_completo ||
+        (phone ? `Contacto · ${phone}` : 'Contacto');
+    }
+    const subtitleParts: string[] = [];
+    if (row?.vendor_lead_code != null && String(row.vendor_lead_code).trim()) {
+      subtitleParts.push(`Ref: ${String(row.vendor_lead_code).trim()}`);
+    }
+    if (row?.lead_id != null) subtitleParts.push(`Lead #${row.lead_id}`);
+    const subtitle =
+      (merged.email && merged.email.trim()) ||
+      (merged.correo && merged.correo.trim()) ||
+      subtitleParts.join(' · ') ||
+      (crmLeadLoading ? 'Cargando ficha…' : 'Sin datos adicionales');
+    const headerTitle = campaignName || selectedCampaignId || agentCampaigns[0] || 'Ficha de contacto';
+    const listName = (row?.list_name != null && String(row.list_name)) || '—';
+    const leadStatus = (row?.status != null && String(row.status)) || merged.status || '—';
+    const extraLine =
+      (merged.plan && merged.plan.trim()) ||
+      (merged.producto && merged.producto.trim()) ||
+      (merged.product && merged.product.trim()) ||
+      '—';
+    const campaignIdRow = row?.campaign_id != null ? String(row.campaign_id) : '';
+    const comments =
+      row?.comments != null && String(row.comments).trim() ? String(row.comments).trim() : '';
+    const altPhone = (merged.alt_phone && merged.alt_phone.trim()) || (merged.telefono2 && merged.telefono2.trim()) || '';
+    return {
+      displayName,
+      subtitle,
+      headerTitle,
+      listName,
+      leadStatus,
+      extraLine,
+      phone,
+      comments,
+      altPhone,
+      campaignIdRow,
+    };
+  }, [
+    crmLeadDetail,
+    assignedLeadVars,
+    callerId,
+    phoneNumber,
+    campaignName,
+    selectedCampaignId,
+    agentCampaigns,
+    crmLeadLoading,
+  ]);
+
+  const formatShiftLogged = React.useCallback((totalSec: number) => {
+    const s = Math.max(0, Math.floor(totalSec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`;
+  }, []);
+
+  const [shiftLoggedBase, setShiftLoggedBase] = useState<{ value: number; atMs: number }>({ value: 0, atMs: Date.now() });
+  const [shiftMetricsHydrated, setShiftMetricsHydrated] = useState(false);
+  const [callsTodayLive, setCallsTodayLive] = useState<number | null>(null);
+  const [queueDepthLive, setQueueDepthLive] = useState<number | null>(null);
+  const [nowTickerMs, setNowTickerMs] = useState(Date.now());
+
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNowTickerMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  React.useEffect(() => {
+    socketService.connect();
+    const handler = (payload: {
+      username: string;
+      logged_seconds?: number;
+      calls_today?: number;
+      queue_depth?: number;
+    }) => {
+      if (!payload || payload.username !== agentUsername) return;
+      setShiftLoggedBase({
+        value: Math.max(0, Number(payload.logged_seconds) || 0),
+        atMs: Date.now(),
+      });
+      setCallsTodayLive(Number(payload.calls_today) || 0);
+      setQueueDepthLive(Number(payload.queue_depth) || 0);
+      setShiftMetricsHydrated(true);
+    };
+    socketService.subscribeAgentWorkspaceMetrics(agentUsername, handler);
+    return () => socketService.unsubscribeAgentWorkspaceMetrics(agentUsername, handler);
+  }, [agentUsername]);
+
+  const liveLoggedSeconds =
+    shiftLoggedBase.value + Math.floor((nowTickerMs - shiftLoggedBase.atMs) / 1000);
+
+  type WorkspaceDashboardData = {
+    notices: Array<{ id: number; body: string; campaign_id: string | null; created_at: string }>;
+    callbacks: Array<{
+      id: number;
+      contact_name: string;
+      phone?: string | null;
+      scheduled_at: string;
+      notes?: string | null;
+      campaign_id?: string | null;
+      status: string;
+    }>;
+    goals: AgentGoalRow[];
+    leaderboard: Array<{ rank: number; username: string; score: number; is_self: boolean }>;
+  };
+  type ChatMessageRow = {
+    id: number;
+    campaign_id: string;
+    agent_username: string;
+    sender_username: string;
+    sender_role: 'AGENT' | 'SUPERVISOR';
+    body: string;
+    created_at: string;
+  };
+  const [workspaceDash, setWorkspaceDash] = useState<WorkspaceDashboardData | null>(null);
+  const [workspaceDashLoading, setWorkspaceDashLoading] = useState(true);
+  const [chatMessages, setChatMessages] = useState<ChatMessageRow[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [activeApp, setActiveApp] = useState<'home' | 'estado' | 'telefono' | 'historial' | 'chat'>('home');
+  const [chatLastReadSupId, setChatLastReadSupId] = React.useState(0);
+  const chatScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const [isSupervisorOnline, setIsSupervisorOnline] = useState(false);
+
+  const reloadWorkspaceDashboard = React.useCallback(async () => {
+    try {
+      setWorkspaceDashLoading(true);
+      const res = await api.getAgentWorkspaceDashboard();
+      if (res.success && res.data) setWorkspaceDash(res.data as WorkspaceDashboardData);
+      else setWorkspaceDash(null);
+    } catch {
+      setWorkspaceDash(null);
+    } finally {
+      setWorkspaceDashLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    reloadWorkspaceDashboard();
+  }, [agentUsername, reloadWorkspaceDashboard]);
+
+  React.useEffect(() => {
+    socketService.connect();
+    const handler = () => {
+      reloadWorkspaceDashboard();
+    };
+    socketService.on('agent:workspace:refresh', handler);
+    return () => socketService.off('agent:workspace:refresh', handler);
+  }, [reloadWorkspaceDashboard]);
+
+  const activeChatCampaignId = selectedCampaignId || agentCampaigns[0] || '';
+  const chatReadStorageKey =
+    activeChatCampaignId && agentUsername
+      ? `gescall_chat_last_read_sup:${activeChatCampaignId}:${agentUsername}`
+      : '';
+
+  const loadChatMessages = React.useCallback(async () => {
+    if (!activeChatCampaignId) {
+      setChatMessages([]);
+      return;
+    }
+    try {
+      setChatLoading(true);
+      const res: any = await api.listAgentWorkspaceChatMessages({
+        campaign_id: activeChatCampaignId,
+      });
+      if (res?.success && Array.isArray(res.data)) setChatMessages(res.data);
+      else setChatMessages([]);
+    } catch {
+      setChatMessages([]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [activeChatCampaignId]);
+
+  React.useEffect(() => {
+    loadChatMessages();
+  }, [loadChatMessages]);
+
+  React.useEffect(() => {
+    if (!chatReadStorageKey) {
+      setChatLastReadSupId(0);
+      return;
+    }
+    try {
+      const stored = parseInt(localStorage.getItem(chatReadStorageKey) || '0', 10);
+      setChatLastReadSupId(Number.isFinite(stored) ? stored : 0);
+    } catch {
+      setChatLastReadSupId(0);
+    }
+  }, [chatReadStorageKey]);
+
+  React.useEffect(() => {
+    if (!activeChatCampaignId || !agentUsername) return;
+    socketService.connect();
+    const handler = (payload: any) => {
+      if (!payload) return;
+      if (payload.campaign_id !== activeChatCampaignId) return;
+      if (payload.agent_username !== agentUsername) return;
+      setChatMessages((prev) => {
+        if (prev.some((m) => m.id === payload.id)) return prev;
+        return [...prev, payload];
+      });
+    };
+    const presenceHandler = (presence: any) => {
+      if (!presence || typeof presence.supervisor_online !== 'boolean') return;
+      const expectedRoom = `agent-workspace-chat:${activeChatCampaignId}:${agentUsername}`;
+      if (presence.room !== expectedRoom) return;
+      setIsSupervisorOnline(Boolean(presence.supervisor_online));
+    };
+    socketService.subscribeAgentWorkspaceChat(activeChatCampaignId, agentUsername, handler, {
+      participantRole: 'AGENT',
+      participantUsername: agentUsername,
+    });
+    socketService.onAgentWorkspaceChatPresence(presenceHandler);
+    return () => {
+      socketService.unsubscribeAgentWorkspaceChat(activeChatCampaignId, agentUsername, handler);
+      socketService.offAgentWorkspaceChatPresence(presenceHandler);
+      setIsSupervisorOnline(false);
+    };
+  }, [activeChatCampaignId, agentUsername]);
+
+  React.useEffect(() => {
+    if (activeApp !== 'chat' || !chatReadStorageKey) return;
+    const maxSupervisorId = chatMessages
+      .filter((m) => m.sender_role === 'SUPERVISOR')
+      .reduce((acc, m) => Math.max(acc, m.id), 0);
+    if (maxSupervisorId <= 0) return;
+    setChatLastReadSupId((prev) => {
+      const next = Math.max(prev, maxSupervisorId);
+      if (next > prev) {
+        try {
+          localStorage.setItem(chatReadStorageKey, String(next));
+        } catch {
+          /* ignore */
+        }
+      }
+      return next;
+    });
+  }, [activeApp, chatMessages, chatReadStorageKey]);
+
+  const supervisorChatUnreadCount = React.useMemo(
+    () =>
+      chatMessages.filter((m) => m.sender_role === 'SUPERVISOR' && m.id > chatLastReadSupId).length,
+    [chatMessages, chatLastReadSupId]
+  );
+  const hasSupervisorUnread = supervisorChatUnreadCount > 0 && activeApp !== 'chat';
+
+  React.useEffect(() => {
+    if (activeApp !== 'chat') return;
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [activeApp, chatMessages, chatLoading]);
+
+  const sendChatMessage = React.useCallback(async () => {
+    if (!activeChatCampaignId) return;
+    const body = chatDraft.trim();
+    if (!body || chatSending) return;
+    setChatSending(true);
+    try {
+      const res: any = await api.sendAgentWorkspaceChatMessage({
+        body,
+        campaign_id: activeChatCampaignId,
+      });
+      if (res?.success && res.data) {
+        setChatDraft('');
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === res.data.id)) return prev;
+          return [...prev, res.data];
+        });
+      }
+    } finally {
+      setChatSending(false);
+    }
+  }, [activeChatCampaignId, chatDraft, chatSending]);
+
+  const formatWorkspaceCallbackSlot = React.useCallback((scheduledAt: string) => {
+    const d = new Date(scheduledAt);
+    if (Number.isNaN(d.getTime())) return { label: '—', timeShort: '--:--' };
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const slotDay = new Date(d);
+    slotDay.setHours(0, 0, 0, 0);
+    const diff = Math.round((slotDay.getTime() - today.getTime()) / 86400000);
+    let label = 'Otro día';
+    if (diff === 0) label = 'Hoy';
+    else if (diff === 1) label = 'Mañana';
+    const timeShort = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return { label, timeShort };
+  }, []);
+
   const defaultOrder = AVAILABLE_WIDGETS.map(w => w.id);
   const [widgetOrder, setWidgetOrder] = useState<string[]>(() => {
     try {
@@ -132,7 +605,6 @@ export const AgentWorkspace: React.FC = () => {
   const [chatHeight, setChatHeight] = useState('h-[320px]');
   const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
   const [isSpeechExpanded, setIsSpeechExpanded] = useState(true);
-  const [activeApp, setActiveApp] = useState<'home' | 'estado' | 'telefono' | 'historial' | 'chat'>('home');
   const [showContactCard, setShowContactCard] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
 
@@ -142,13 +614,16 @@ export const AgentWorkspace: React.FC = () => {
     }
   }, [callStatus]);
 
-  const PAUSE_CONFIG: Record<string, { name: string; limit: number }> = {
-    'not_ready_bano': { name: 'Pausa - Baño', limit: 15 }, // 15 segundos para testing rápido
-    'not_ready_almuerzo': { name: 'Pausa - Almuerzo', limit: 1800 },
-    'not_ready_backoffice': { name: 'Pausa - Backoffice', limit: 900 },
-    'not_ready_capacitacion': { name: 'Pausa - Capacitación', limit: 3600 },
-    'not_ready': { name: 'No Disponible', limit: 600 },
-  };
+  const PAUSE_CONFIG = campaignPauseConfig;
+  const AUX_PAUSES = React.useMemo(() => {
+    return Object.entries(PAUSE_CONFIG)
+      .filter(([id, cfg]) => id !== 'not_ready' && cfg.enabled)
+      .map(([id, cfg]) => ({
+        id,
+        label: cfg.name,
+        icon: cfg.icon || 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z',
+      }));
+  }, [PAUSE_CONFIG]);
 
   const [pauseOverlay, setPauseOverlay] = useState<{
     isOpen: boolean;
@@ -174,6 +649,30 @@ export const AgentWorkspace: React.FC = () => {
     return 0;
   });
   const [pinError, setPinError] = useState(false);
+  const [pinVerifying, setPinVerifying] = useState(false);
+
+  const verifyPausePin = React.useCallback(
+    async (pin: string, onValid: () => void) => {
+      if (pinVerifying) return;
+      setPinVerifying(true);
+      setPinError(false);
+      try {
+        const res: any = await api.verifyAgentWorkspacePausePin(pin);
+        if (res?.success) {
+          onValid();
+          setPausePinInput('');
+          return;
+        }
+      } catch (_) {
+        // handled as invalid PIN below
+      } finally {
+        setPinVerifying(false);
+      }
+      setPinError(true);
+      window.setTimeout(() => setPausePinInput(''), 400);
+    },
+    [pinVerifying]
+  );
 
   React.useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -185,15 +684,27 @@ export const AgentWorkspace: React.FC = () => {
     return () => clearInterval(interval);
   }, [pauseOverlay]);
 
-  // Compute the current detailed state string for backend broadcast
+  // Estado hacia Redis / dialer: solo READY recibe marcación entrante/desde cola.
+  // Con PIN pendiente enviamos PAUSE_PENDING (no READY, sin fila en reporte hasta confirmar).
   const detailedState = React.useMemo(() => {
     if (sipStatus === 'disconnected') return 'OFFLINE';
-    let s = agentState.toUpperCase();
-    if (callStatus === 'connected') s = 'ON_CALL';
-    if (callStatus === 'calling') s = 'DIALING';
-    if (isTipificarOpen) s = 'WRAPUP';
-    return s;
-  }, [agentState, callStatus, isTipificarOpen, sipStatus]);
+    if (callStatus === 'connected') return 'ON_CALL';
+    if (callStatus === 'calling') return 'DIALING';
+    if (isTipificarOpen) return 'WRAPUP';
+    if (pauseOverlay?.isOpen && pauseOverlay.targetStateId) {
+      if (pauseOverlay.step === 'request_pin') return 'PAUSE_PENDING';
+      return String(pauseOverlay.targetStateId).toUpperCase();
+    }
+    return agentState.toUpperCase();
+  }, [
+    agentState,
+    callStatus,
+    isTipificarOpen,
+    sipStatus,
+    pauseOverlay?.isOpen,
+    pauseOverlay?.step,
+    pauseOverlay?.targetStateId,
+  ]);
 
   // Keep latest state in a ref so reconnect/heartbeat handlers always read the freshest value
   const detailedStateRef = React.useRef(detailedState);
@@ -245,13 +756,32 @@ export const AgentWorkspace: React.FC = () => {
         console.log('[AgentWorkspace] agent:call:assigned received — campaign:', data.campaign_id);
         setSelectedCampaignId(data.campaign_id);
         localStorage.setItem('gescall_last_call_campaign', data.campaign_id);
+
+        const mergedVars: Record<string, string> = {};
+        const pushVars = (obj: any) => {
+          if (!obj || typeof obj !== 'object') return;
+          for (const [k, v] of Object.entries(obj)) {
+            if (!k || v === null || v === undefined) continue;
+            if (typeof v === 'object') continue;
+            mergedVars[String(k)] = String(v);
+          }
+        };
+        pushVars(data);
+        pushVars(data.lead);
+        pushVars(data.lead_data);
+        pushVars(data.tts_vars);
+        pushVars(data.form_data);
+        setAssignedLeadVars(mergedVars);
+        setCrmLeadDetail(null);
+        const lid = data.lead_id != null ? String(data.lead_id).trim() : '';
+        if (lid && lid !== '0') void loadAgentWorkspaceLead(lid);
       }
     };
     sock?.on('agent:call:assigned', handler);
     return () => {
       sock?.off('agent:call:assigned', handler);
     };
-  }, []);
+  }, [loadAgentWorkspaceLead]);
 
   // When typification modal opens, ensure campaign is set.
   // Falls back to localStorage (set by agent:call:assigned) or agent's first campaign.
@@ -370,6 +900,7 @@ export const AgentWorkspace: React.FC = () => {
     } else if (sipStatus === 'disconnected' || sipStatus === 'registered') {
       // Automatically hide the teleprompter when the call ends
       setIsTeleprompterVisible(false);
+      setAssignedLeadVars({});
     }
   }, [sipStatus, activeWidgets]);
 
@@ -414,28 +945,55 @@ export const AgentWorkspace: React.FC = () => {
 
       switch (widgetId) {
           case 'metas':
-            return <GoalsWidget key="metas" />;
+            return (
+              <GoalsWidget
+                key="metas"
+                goals={(workspaceDash?.goals ?? []) as AgentGoalRow[]}
+                loading={workspaceDashLoading}
+              />
+            );
             
           case 'notas':
             return <StickyNotesWidget key="notas" />;
             
           case 'avisos':
-            return (
+            return (() => {
+              const notice = workspaceDash?.notices?.[0];
+              return (
               <div key="avisos" className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl shadow-lg p-4 text-white group">
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex items-center gap-2 font-bold text-sm">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-indigo-200"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
                     Aviso del Supervisor
                   </div>
-                  <button className="text-white/50 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                  {notice?.id !== undefined ? (
+                  <button
+                    type="button"
+                    title="Ocultar aviso"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      api.dismissAgentWorkspaceNotice(notice.id).then(() => reloadWorkspaceDashboard()).catch(() => {});
+                    }}
+                    className="text-white/50 hover:text-white opacity-70 group-hover:opacity-100 transition-opacity"
+                  >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                   </button>
+                  ) : (
+                  <button type="button" className="text-white/40 cursor-default opacity-0 group-hover:opacity-80" aria-hidden>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                  </button>
+                  )}
                 </div>
-                <p className="text-xs text-indigo-100 leading-relaxed font-medium">
-                  "Recuerden ofrecer el nuevo plan de 100GB a todos los clientes que llamen por lentitud en su internet hoy."
-                </p>
+                {workspaceDashLoading ? (
+                  <p className="text-xs text-indigo-200/80 italic">Cargando aviso…</p>
+                ) : notice ? (
+                  <p className="text-xs text-indigo-100 leading-relaxed font-medium">{notice.body}</p>
+                ) : (
+                  <p className="text-xs text-indigo-100/70 leading-relaxed font-medium italic">No hay avisos activos del supervisor para tus campañas.</p>
+                )}
               </div>
-            );
+              );
+            })();
 
           case 'teleprompter':
             return (
@@ -456,63 +1014,95 @@ export const AgentWorkspace: React.FC = () => {
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
                     Callbacks Agendados
                   </div>
-                  <button className="text-slate-300 hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                  </button>
                 </div>
+                {workspaceDashLoading ? (
+                  <p className="text-xs text-slate-400 italic">Cargando…</p>
+                ) : !(workspaceDash?.callbacks?.length) ? (
+                  <p className="text-xs text-slate-400 italic py-4 text-center">No tienes callbacks agendados.</p>
+                ) : (
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-3 p-2 rounded-lg bg-blue-50 border border-blue-100">
-                    <div className="flex flex-col items-center justify-center bg-white rounded-md w-10 h-10 shadow-sm border border-slate-100">
-                      <span className="text-[9px] font-bold text-red-500 uppercase leading-none mt-1">Hoy</span>
-                      <span className="text-sm font-black text-slate-700 leading-none mb-1">16:30</span>
+                  {workspaceDash.callbacks.slice(0, 6).map((cb) => {
+                    const { label: dayLabel, timeShort } = formatWorkspaceCallbackSlot(cb.scheduled_at);
+                    const isTodaySlot = dayLabel === 'Hoy';
+                    const subtitle = (cb.notes || '').trim() || (cb.phone ? String(cb.phone) : 'Sin detalle');
+                    return (
+                    <div
+                      key={cb.id}
+                      className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${isTodaySlot ? 'bg-blue-50 border border-blue-100' : 'hover:bg-slate-50 border border-transparent'}`}
+                    >
+                      <div className={`flex flex-col items-center justify-center rounded-md w-10 h-10 shrink-0 ${isTodaySlot ? 'bg-white shadow-sm border border-slate-100' : 'bg-slate-100'}`}>
+                        <span className={`text-[9px] font-bold uppercase leading-none mt-1 ${isTodaySlot ? 'text-red-500' : 'text-slate-400'}`}>{dayLabel}</span>
+                        <span className={`text-sm font-black leading-none mb-1 ${isTodaySlot ? 'text-slate-700' : 'text-slate-600'}`}>{timeShort}</span>
+                      </div>
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className={`text-xs font-bold ${isTodaySlot ? 'text-slate-800' : 'text-slate-600'}`}>{cb.contact_name}</span>
+                        <span className="text-[10px] text-slate-500 truncate" title={subtitle}>{subtitle}</span>
+                      </div>
+                      <button
+                        type="button"
+                        title="Marcar como hecho"
+                        onClick={() =>
+                          api.completeAgentWorkspaceCallback(cb.id).then(() => reloadWorkspaceDashboard()).catch(() => {})
+                        }
+                        className="shrink-0 text-[10px] font-bold text-blue-600 hover:text-blue-800 px-2 py-1 rounded-md hover:bg-blue-100/80"
+                      >
+                        Hecho
+                      </button>
                     </div>
-                    <div className="flex flex-col">
-                      <span className="text-xs font-bold text-slate-800">Carlos Mendoza</span>
-                      <span className="text-[10px] text-slate-500">Renovación Póliza</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 border border-transparent transition-colors cursor-pointer">
-                    <div className="flex flex-col items-center justify-center bg-slate-100 rounded-md w-10 h-10">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase leading-none mt-1">Mañana</span>
-                      <span className="text-sm font-bold text-slate-600 leading-none mb-1">10:00</span>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-xs font-semibold text-slate-600">Empresa XYZ</span>
-                      <span className="text-[10px] text-slate-400">Seguimiento B2B</span>
-                    </div>
-                  </div>
+                  );
+                  })}
                 </div>
+                )}
               </div>
             );
 
           case 'ranking':
-            return (
+            return (() => {
+              const top = (workspaceDash?.leaderboard ?? []).slice(0, 3);
+              const rankStyle = (r: number) => {
+                if (r === 1) return 'bg-white/10 border border-yellow-400/30 shadow-[0_0_10px_rgba(250,204,21,0.1)]';
+                if (r === 2) return 'bg-white/5 border border-white/5';
+                return 'bg-white/5 rounded-lg border border-transparent opacity-90';
+              };
+              const medal = (r: number) => {
+                if (r === 1) return 'bg-yellow-400 text-yellow-900';
+                if (r === 2) return 'bg-slate-300 text-slate-700';
+                return 'bg-amber-600 text-white';
+              };
+              const nameCls = (isSelf: boolean) =>
+                isSelf ? 'text-xs font-bold text-indigo-200 flex-1' : 'text-xs font-medium flex-1 text-slate-300';
+
+              return (
               <div key="ranking" className="bg-slate-900 rounded-2xl shadow-lg border border-slate-800 p-4 text-white group">
                 <div className="flex justify-between items-start mb-3">
                   <div className="flex items-center gap-2 font-bold text-sm">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-yellow-400"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
-                    Top 3 - Ventas Hoy
+                    Top 3 — Tipificaciones hoy
                   </div>
                 </div>
+                {workspaceDashLoading ? (
+                  <p className="text-xs text-slate-400 italic">Cargando ranking…</p>
+                ) : top.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic py-4 text-center">Sin tipificaciones hoy en tus campañas.</p>
+                ) : (
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-3 bg-white/10 rounded-lg p-2 border border-yellow-400/30 shadow-[0_0_10px_rgba(250,204,21,0.1)]">
-                    <div className="w-6 h-6 rounded-full bg-yellow-400 text-yellow-900 flex items-center justify-center font-black text-xs">1</div>
-                    <span className="text-xs font-bold flex-1">María González</span>
-                    <span className="text-xs font-black text-yellow-400">24</span>
-                  </div>
-                  <div className="flex items-center gap-3 bg-white/5 rounded-lg p-2">
-                    <div className="w-6 h-6 rounded-full bg-slate-300 text-slate-700 flex items-center justify-center font-black text-xs">2</div>
-                    <span className="text-xs font-medium text-slate-300 flex-1">Tú (Agente Demo)</span>
-                    <span className="text-xs font-bold text-slate-300">12</span>
-                  </div>
-                  <div className="flex items-center gap-3 bg-white/5 rounded-lg p-2 opacity-70">
-                    <div className="w-6 h-6 rounded-full bg-amber-600 text-white flex items-center justify-center font-black text-xs">3</div>
-                    <span className="text-xs font-medium text-slate-400 flex-1">Luis Fernando</span>
-                    <span className="text-xs font-bold text-slate-400">9</span>
-                  </div>
+                  {top.map((row) => (
+                    <div
+                      key={row.rank + row.username}
+                      className={`flex items-center gap-3 rounded-lg p-2 ${rankStyle(row.rank)}`}
+                    >
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-xs ${medal(row.rank)}`}>{row.rank}</div>
+                      <span className={nameCls(row.is_self)}>
+                        {row.is_self ? `Tú (${agentUsername})` : row.username}
+                      </span>
+                      <span className={`text-xs font-black tabular-nums ${row.rank === 1 ? 'text-yellow-400' : row.is_self ? 'text-indigo-200' : 'text-slate-400'}`}>{row.score}</span>
+                    </div>
+                  ))}
                 </div>
+                )}
               </div>
-            );
+              );
+            })();
 
           default:
             return null;
@@ -535,12 +1125,6 @@ export const AgentWorkspace: React.FC = () => {
     return widgets;
   };
 
-  const mockNotes = [
-    { id: 1, agent: 'Carlos Martínez', date: '2023-10-24 10:15 AM', text: 'Cliente reportó lentitud intermitente. Se agendó revisión técnica.' },
-    { id: 2, agent: 'Ana Sofía', date: '2023-10-25 02:30 PM', text: 'Se le ofreció el upgrade a 100GB pero indicó que lo pensará y llamará después.' },
-    { id: 3, agent: 'Luis Fernando', date: 'Hoy 09:45 AM', text: 'Llama preguntando por el estatus del ticket técnico. Sigue en curso.' }
-  ];
-
   return (
     <div className="flex h-full gap-6 w-full p-2 relative">
       <audio ref={audioRef} autoPlay className="hidden" />
@@ -558,27 +1142,25 @@ export const AgentWorkspace: React.FC = () => {
                   type="password" 
                   maxLength={4}
                   value={pausePinInput}
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const val = e.target.value.replace(/\D/g, '');
                     setPinError(false);
                     setPausePinInput(val);
                     if (val.length === 4) {
-                      if (val === '1234') { // Mock PIN validation
+                      await verifyPausePin(val, () => {
                         setAgentState(pauseOverlay.targetStateId as any);
                         setPauseOverlay({ ...pauseOverlay, step: 'timer', startTime: Date.now() });
                         setPauseElapsed(0);
-                        setTimeout(() => setPausePinInput(''), 100);
-                      } else {
-                        setPinError(true);
-                        setTimeout(() => setPausePinInput(''), 400);
-                      }
+                      });
                     }
                   }}
+                  disabled={pinVerifying}
                   className={`text-center text-4xl tracking-[1em] font-mono border-b-2 bg-slate-50 w-full py-4 rounded-xl outline-none transition-colors ${pinError ? 'border-red-500 text-red-500 bg-red-50' : 'border-indigo-200 focus:border-indigo-500 focus:bg-indigo-50/30 text-slate-800'}`}
                   placeholder="••••"
                   autoFocus
                 />
-                {pinError && <p className="text-red-500 text-sm mt-3 font-medium">PIN incorrecto. Intenta de nuevo.</p>}
+                {pinVerifying && <p className="text-slate-500 text-sm mt-3 font-medium">Validando PIN...</p>}
+                {pinError && !pinVerifying && <p className="text-red-500 text-sm mt-3 font-medium">PIN incorrecto. Intenta de nuevo.</p>}
                 
                 <button 
                   onClick={() => setPauseOverlay(null)}
@@ -616,24 +1198,23 @@ export const AgentWorkspace: React.FC = () => {
                     type="password" 
                     maxLength={4}
                     value={pausePinInput}
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const val = e.target.value.replace(/\D/g, '');
                       setPinError(false);
                       setPausePinInput(val);
                       if (val.length === 4) {
-                        if (val === '1234') {
+                        await verifyPausePin(val, () => {
                           setAgentState('ready');
                           setPauseOverlay(null);
-                        } else {
-                          setPinError(true);
-                          setTimeout(() => setPausePinInput(''), 400);
-                        }
+                        });
                       }
                     }}
+                    disabled={pinVerifying}
                     className={`text-center text-3xl tracking-[0.8em] font-mono border-b-2 bg-white w-full py-3 rounded-lg outline-none transition-colors ${pinError ? 'border-red-500 text-red-500' : 'border-slate-300 focus:border-indigo-500 text-slate-800'}`}
                     placeholder="••••"
                   />
-                  {pinError && <p className="text-red-500 text-sm mt-2 text-center font-medium">PIN incorrecto</p>}
+                  {pinVerifying && <p className="text-slate-500 text-sm mt-2 text-center font-medium">Validando PIN...</p>}
+                  {pinError && !pinVerifying && <p className="text-red-500 text-sm mt-2 text-center font-medium">PIN incorrecto</p>}
                 </div>
               </>
             )}
@@ -655,29 +1236,43 @@ export const AgentWorkspace: React.FC = () => {
             Métricas de mi Turno
           </h2>
           <div className="flex flex-col gap-3 mb-6 w-full">
-            <div className={`flex items-center p-3 rounded-lg bg-slate-50 border border-slate-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center cursor-pointer hover:bg-slate-100'}`} title="Tiempo Logueado: 04h 15m">
+            <div className={`flex items-center p-3 rounded-lg bg-slate-50 border border-slate-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center cursor-pointer hover:bg-slate-100'}`} title={`Tiempo logueado en turno hoy (${formatShiftLogged(liveLoggedSeconds)})`}>
               <div className={`flex items-center gap-2 text-slate-600 font-medium ${isLeftSidebarOpen ? 'text-sm' : ''}`}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 {isLeftSidebarOpen && "Tiempo Logueado"}
               </div>
-              {isLeftSidebarOpen && <span className="text-sm font-bold text-slate-800">04h 15m</span>}
+              {isLeftSidebarOpen && (
+                <span className="text-sm font-bold text-slate-800 tabular-nums">
+                  {shiftMetricsHydrated ? formatShiftLogged(liveLoggedSeconds) : '—'}
+                </span>
+              )}
             </div>
-            <div className={`flex items-center p-3 rounded-lg bg-slate-50 border border-slate-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center cursor-pointer hover:bg-slate-100'}`} title="Llamadas Hoy: 42">
+            <div className={`flex items-center p-3 rounded-lg bg-slate-50 border border-slate-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center cursor-pointer hover:bg-slate-100'}`} title={`Llamadas donde participaste hoy (${callsTodayLive ?? '…'}): registros con tu usuario en tipificación o transferido`}
+            >
               <div className={`flex items-center gap-2 text-slate-600 font-medium ${isLeftSidebarOpen ? 'text-sm' : ''}`}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
                 {isLeftSidebarOpen && "Llamadas Hoy"}
               </div>
-              {isLeftSidebarOpen && <span className="text-sm font-bold text-slate-800">42</span>}
+              {isLeftSidebarOpen && (
+                <span className="text-sm font-bold text-slate-800 tabular-nums">
+                  {callsTodayLive === null ? '—' : callsTodayLive}
+                </span>
+              )}
             </div>
-            <div className={`flex items-center p-3 rounded-lg bg-red-50 border border-red-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center relative cursor-pointer hover:bg-red-100'}`} title="Llamadas en Cola: 5">
+            <div className={`flex items-center p-3 rounded-lg bg-red-50 border border-red-100 transition-colors ${isLeftSidebarOpen ? 'justify-between' : 'justify-center relative cursor-pointer hover:bg-red-100'}`} title={`Prospectos en cola o pendientes (${queueDepthLive ?? '…'}): listas activas de tus campañas; si sin campaña, todas`}
+            >
               <div className={`flex items-center gap-2 text-red-600 font-medium ${isLeftSidebarOpen ? 'text-sm' : ''}`}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="M17 18a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2"/><rect width="18" height="18" x="3" y="4" rx="2"/><circle cx="12" cy="10" r="2"/><line x1="8" x2="8" y1="2" y2="4"/><line x1="16" x2="16" y1="2" y2="4"/></svg>
                 {isLeftSidebarOpen && "Llamadas en Cola"}
               </div>
               {isLeftSidebarOpen ? (
-                <span className="text-sm font-black text-red-600 animate-pulse">5</span>
+                <span className={`text-sm font-black text-red-600 tabular-nums ${queueDepthLive !== null && queueDepthLive > 0 ? 'animate-pulse' : ''}`}>
+                  {queueDepthLive === null ? '—' : queueDepthLive}
+                </span>
               ) : (
-                <div className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-md">5</div>
+                <div className={`absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold min-w-[1.25rem] px-1 h-5 flex items-center justify-center rounded-full shadow-md ${queueDepthLive !== null && queueDepthLive > 0 ? '' : 'opacity-70'}`}>
+                  {queueDepthLive === null ? '—' : queueDepthLive}
+                </div>
               )}
             </div>
           </div>
@@ -735,8 +1330,7 @@ export const AgentWorkspace: React.FC = () => {
               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 shadow-inner">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
               </div>
-              {/* Campaign Name replaces Ficha de Contacto */}
-              XIRA DEMO MEXICO
+              {crmSnapshot.headerTitle}
             </h2>
             <button 
               onClick={() => setIsTipificarOpen(true)}
@@ -765,23 +1359,27 @@ export const AgentWorkspace: React.FC = () => {
                     <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   </div>
                   
-                  <h3 className="text-xl font-black text-slate-800 leading-tight mb-1 relative z-10">Juan Pérez García</h3>
-                  <p className="text-[13px] font-semibold text-slate-400 mb-6 relative z-10">juan.perez@example.com</p>
+                  <h3 className="text-xl font-black text-slate-800 leading-tight mb-1 relative z-10">{crmSnapshot.displayName}</h3>
+                  <p className="text-[13px] font-semibold text-slate-400 mb-6 relative z-10">{crmSnapshot.subtitle}</p>
 
                   <div className="w-full flex flex-col gap-2.5 mt-auto">
                     <div className="flex items-center justify-between px-4 py-3 bg-slate-50/80 rounded-2xl border border-slate-100/80">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estado</span>
-                      <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1.5 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100/50 shadow-sm">
-                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> Al corriente
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estado lead</span>
+                      <span className="text-[11px] font-bold text-slate-700 px-2 py-1 rounded-lg border border-slate-200 bg-white max-w-[60%] truncate" title={crmSnapshot.leadStatus}>
+                        {crmSnapshot.leadStatus}
                       </span>
                     </div>
                     <div className="flex items-center justify-between px-4 py-3 bg-slate-50/80 rounded-2xl border border-slate-100/80">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Plan</span>
-                      <span className="text-[12px] font-bold text-slate-700">Premium 50GB</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Extra</span>
+                      <span className="text-[12px] font-bold text-slate-700 max-w-[65%] truncate text-right" title={crmSnapshot.extraLine}>
+                        {crmSnapshot.extraLine}
+                      </span>
                     </div>
                     <div className="flex items-center justify-between px-4 py-3 bg-slate-50/80 rounded-2xl border border-slate-100/80">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Campaña</span>
-                      <span className="text-[12px] font-bold text-slate-700">XIRA DEMO MEXICO</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lista / campaña</span>
+                      <span className="text-[12px] font-bold text-slate-700 max-w-[65%] truncate text-right" title={crmSnapshot.campaignIdRow ? `${crmSnapshot.listName} · ${crmSnapshot.campaignIdRow}` : crmSnapshot.listName}>
+                        {crmSnapshot.campaignIdRow ? `${crmSnapshot.listName} · ${crmSnapshot.campaignIdRow}` : crmSnapshot.listName}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -797,45 +1395,40 @@ export const AgentWorkspace: React.FC = () => {
                      Canales de Contacto Directo
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
-                    <div 
-                      onDoubleClick={() => makeCall('+525598765432')}
-                      className="bg-slate-50/60 rounded-[16px] border border-slate-200/60 p-4 shadow-sm flex items-center gap-4 group hover:border-indigo-300 hover:bg-white hover:shadow-md transition-all cursor-pointer"
-                    >
-                      <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center shrink-0 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                    {crmSnapshot.phone ? (
+                      <div 
+                        onDoubleClick={() => makeCall(crmSnapshot.phone)}
+                        className="bg-slate-50/60 rounded-[16px] border border-slate-200/60 p-4 shadow-sm flex items-center gap-4 group hover:border-indigo-300 hover:bg-white hover:shadow-md transition-all cursor-pointer"
+                        title="Doble clic para marcar desde el softphone"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center shrink-0 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-[10px] font-bold text-slate-400">TELÉFONO PRINCIPAL</span>
+                          <span className="text-[14px] font-bold text-slate-800 truncate" title={crmSnapshot.phone}>{crmSnapshot.phone}</span>
+                        </div>
                       </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-bold text-slate-400">LLAMAR AL CLIENTE</span>
-                        <span className="text-[14px] font-bold text-slate-800">+52 55 9876 5432</span>
+                    ) : (
+                      <div className="col-span-2 bg-slate-50/60 rounded-[16px] border border-dashed border-slate-200 p-4 text-center text-sm text-slate-500">
+                        Sin número en la ficha. Si la llamada fue asignada por cola/IVR, debería aparecer al enlazar el lead.
                       </div>
-                    </div>
-                    <div className="bg-slate-50/60 rounded-[16px] border border-slate-200/60 p-4 shadow-sm flex items-center gap-4 group hover:border-emerald-300 hover:bg-white hover:shadow-md transition-all cursor-pointer">
-                      <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center shrink-0 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                    )}
+                    {crmSnapshot.altPhone ? (
+                      <div 
+                        onDoubleClick={() => makeCall(crmSnapshot.altPhone)}
+                        className="bg-slate-50/60 rounded-[16px] border border-slate-200/60 p-4 shadow-sm flex items-center gap-4 group hover:border-emerald-300 hover:bg-white hover:shadow-md transition-all cursor-pointer"
+                        title="Doble clic para marcar"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center shrink-0 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-[10px] font-bold text-slate-400">TELÉFONO ALTERNATIVO</span>
+                          <span className="text-[14px] font-bold text-slate-800 truncate" title={crmSnapshot.altPhone}>{crmSnapshot.altPhone}</span>
+                        </div>
                       </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-bold text-slate-400">MENSAJE WHATSAPP</span>
-                        <span className="text-[14px] font-bold text-slate-800">+52 55 9876 5432</span>
-                      </div>
-                    </div>
-                    <div className="bg-slate-50/60 rounded-[16px] border border-slate-200/60 p-4 shadow-sm flex items-center gap-4 group hover:border-blue-300 hover:bg-white hover:shadow-md transition-all cursor-pointer">
-                      <div className="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center shrink-0 group-hover:bg-blue-500 group-hover:text-white transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-bold text-slate-400">CHAT DE TELEGRAM</span>
-                        <span className="text-[14px] font-bold text-slate-800">juanperez_mx</span>
-                      </div>
-                    </div>
-                    <div className="bg-slate-50/30 rounded-[16px] border border-slate-200/40 p-4 shadow-sm flex items-center gap-4 opacity-50 grayscale cursor-not-allowed">
-                      <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center shrink-0">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4l16 16"/><path d="M4 20L20 4"/></svg>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-bold text-slate-400">TWITTER / X</span>
-                        <span className="text-[14px] font-bold text-slate-500">No asociado</span>
-                      </div>
-                    </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -849,20 +1442,21 @@ export const AgentWorkspace: React.FC = () => {
                     
                     {/* Notes History (Scrollable) */}
                     <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5 custom-scrollbar bg-slate-50/50">
-                      {mockNotes.map((note) => (
-                        <div key={note.id} className="flex flex-col gap-1.5">
+                      {crmSnapshot.comments ? (
+                        <div className="flex flex-col gap-1.5">
                           <div className="flex items-center gap-2">
                             <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold">
-                              {note.agent.substring(0,2).toUpperCase()}
+                              DB
                             </div>
-                            <span className="text-[12px] font-bold text-slate-700">{note.agent}</span>
-                            <span className="text-[10px] text-slate-400 font-medium ml-auto">{note.date}</span>
+                            <span className="text-[12px] font-bold text-slate-700">Comentario en lead</span>
                           </div>
                           <div className="ml-8 bg-white border border-slate-200/80 rounded-2xl rounded-tl-none p-3 shadow-sm relative">
-                            <p className="text-[13px] text-slate-600 leading-relaxed">{note.text}</p>
+                            <p className="text-[13px] text-slate-600 leading-relaxed whitespace-pre-wrap">{crmSnapshot.comments}</p>
                           </div>
                         </div>
-                      ))}
+                      ) : (
+                        <p className="text-sm text-slate-500 text-center py-6">Sin comentarios guardados en el lead.</p>
+                      )}
                     </div>
 
                     {/* New Note Input Area */}
@@ -937,6 +1531,16 @@ export const AgentWorkspace: React.FC = () => {
               }
             }}
           >
+            {!isPhoneExpanded && hasSupervisorUnread && (
+              <>
+                <div className="pointer-events-none absolute -inset-1 rounded-[40px] border border-cyan-400/60 animate-pulse"></div>
+                <div className="pointer-events-none absolute -inset-2 rounded-[44px] border border-cyan-300/30 animate-pulse [animation-delay:220ms]"></div>
+                <div className="absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-[#0A0A0C] flex items-center justify-center tabular-nums z-20">
+                  {supervisorChatUnreadCount > 99 ? '99+' : supervisorChatUnreadCount}
+                </div>
+              </>
+            )}
+
             {/* Compact Mini Phone Content (Fades out when expanded) */}
             <div className={`absolute inset-0 flex items-center justify-between px-4 transition-opacity duration-300 ${!isPhoneExpanded ? 'opacity-100 delay-200 z-10' : 'opacity-0 pointer-events-none z-0'}`}>
               {callStatus !== 'idle' ? (
@@ -1077,9 +1681,13 @@ export const AgentWorkspace: React.FC = () => {
                     >
                       <div className="w-[52px] h-[52px] rounded-[14px] flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.15)] transition-transform group-active:scale-95 bg-gradient-to-b from-[#34C759] to-[#248A3D] relative">
                         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full border-2 border-[#0A0A0C] flex items-center justify-center">
-                          <span className="text-[10px] font-bold text-white">2</span>
-                        </div>
+                        {supervisorChatUnreadCount > 0 && (
+                          <div className="absolute -top-1 -right-1 min-w-[20px] h-5 px-0.5 bg-red-500 rounded-full border-2 border-[#0A0A0C] flex items-center justify-center">
+                            <span className="text-[10px] font-bold text-white tabular-nums">
+                              {supervisorChatUnreadCount > 99 ? '99+' : supervisorChatUnreadCount}
+                            </span>
+                          </div>
+                        )}
                       </div>
                       <span className="text-[11px] text-white font-medium tracking-wide drop-shadow-md">Chat</span>
                     </div>
@@ -1154,6 +1762,7 @@ export const AgentWorkspace: React.FC = () => {
                         className="flex items-center justify-between p-4 active:bg-slate-50 cursor-pointer"
                         onClick={() => {
                           const config = PAUSE_CONFIG['not_ready'];
+                          if (!config?.enabled) return;
                           setPauseOverlay({ isOpen: true, step: 'request_pin', targetStateId: 'not_ready', targetStateName: config.name, limitSeconds: config.limit, startTime: 0 });
                           setPausePinInput('');
                           setPinError(false);
@@ -1173,17 +1782,13 @@ export const AgentWorkspace: React.FC = () => {
 
                     <h3 className="text-[13px] uppercase text-slate-500 font-medium ml-4 mb-2 tracking-wide">Pausas Auxiliares</h3>
                     <div className="bg-white rounded-xl overflow-hidden">
-                      {[
-                        { id: 'not_ready_bano', label: 'Pausa - Baño', icon: 'M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' },
-                        { id: 'not_ready_almuerzo', label: 'Pausa - Almuerzo', icon: 'M18 8h1a4 4 0 0 1 0 8h-1M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8zM6 1v3M10 1v3M14 1v3' },
-                        { id: 'not_ready_backoffice', label: 'Pausa - Backoffice', icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' },
-                        { id: 'not_ready_capacitacion', label: 'Pausa - Capacitación', icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' }
-                      ].map((pausa, idx, arr) => (
+                      {AUX_PAUSES.map((pausa, idx, arr) => (
                         <div 
                           key={pausa.id}
                           className={`flex items-center justify-between p-4 active:bg-slate-50 cursor-pointer ${idx !== arr.length - 1 ? 'border-b border-slate-100' : ''}`}
                           onClick={() => {
                             const config = PAUSE_CONFIG[pausa.id];
+                            if (!config?.enabled) return;
                             setPauseOverlay({ isOpen: true, step: 'request_pin', targetStateId: pausa.id, targetStateName: config.name, limitSeconds: config.limit, startTime: 0 });
                             setPausePinInput('');
                             setPinError(false);
@@ -1200,6 +1805,9 @@ export const AgentWorkspace: React.FC = () => {
                           {agentState === pausa.id && <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#007aff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
                         </div>
                       ))}
+                      {AUX_PAUSES.length === 0 && (
+                        <div className="p-4 text-xs text-slate-400">No hay pausas auxiliares habilitadas en esta campaña.</div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1250,30 +1858,65 @@ export const AgentWorkspace: React.FC = () => {
                         <span className="text-xs font-semibold text-slate-500">Sup</span>
                       </div>
                       <h2 className="text-[11px] font-semibold text-black">Supervisor</h2>
+                      <div className="flex items-center gap-1">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${isSupervisorOnline ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
+                        <span className="text-[10px] text-slate-500">{isSupervisorOnline ? 'en linea' : 'desconectado'}</span>
+                      </div>
                     </div>
                   </div>
                   
-                  <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 custom-scrollbar relative">
-                    <div className="text-center text-[11px] text-slate-400 font-medium my-2">Hoy 10:41</div>
-                    <div className="self-end bg-[#007aff] text-white text-[15px] px-3.5 py-2 rounded-2xl rounded-br-sm max-w-[80%] shadow-sm">
-                      Supervisor, ¿puedo aplicar el 15% a este cliente que amenaza con irse?
-                    </div>
-                    <div className="self-start bg-white text-black text-[15px] px-3.5 py-2 rounded-2xl rounded-bl-sm max-w-[80%] border border-slate-200 shadow-sm">
-                      Sí, aplícalo pero asegúrate de renovarlo por 12 meses.
-                    </div>
-                    <div className="self-end bg-[#007aff] text-white text-[15px] px-3.5 py-2 rounded-2xl rounded-br-sm max-w-[80%] shadow-sm">
-                      Perfecto, ya logré cerrar la retención. ¡Gracias!
-                    </div>
-                    <div className="self-start bg-white text-black text-[15px] px-3.5 py-2 rounded-2xl rounded-bl-sm max-w-[80%] border border-slate-200 shadow-sm">
-                      ¡Excelente trabajo! Sigue así.
-                    </div>
+                  <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 custom-scrollbar relative">
+                    {!activeChatCampaignId ? (
+                      <div className="my-auto text-center text-xs text-slate-400">
+                        No tienes una campaña activa para abrir el chat.
+                      </div>
+                    ) : chatLoading ? (
+                      <div className="my-auto text-center text-xs text-slate-400">Cargando chat…</div>
+                    ) : chatMessages.length === 0 ? (
+                      <div className="my-auto text-center text-xs text-slate-400">
+                        Aun no hay mensajes con tu supervisor.
+                      </div>
+                    ) : (
+                      chatMessages.map((msg) => {
+                        const mine = msg.sender_role === 'AGENT';
+                        return (
+                          <div
+                            key={msg.id}
+                            className={`${mine ? 'self-end bg-[#007aff] text-white rounded-br-sm' : 'self-start bg-white text-black rounded-bl-sm border border-slate-200'} text-[15px] px-3.5 py-2 rounded-2xl max-w-[85%] shadow-sm`}
+                            title={`${msg.sender_username} · ${new Date(msg.created_at).toLocaleString()}`}
+                          >
+                            <p className="whitespace-pre-wrap break-words">{msg.body}</p>
+                            <p className={`mt-1 text-[10px] ${mine ? 'text-blue-100' : 'text-slate-400'}`}>
+                              {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                   
                   <div className="p-3 bg-[#F2F2F7] border-t border-slate-200 shrink-0 flex items-end gap-2 relative z-10 pb-8">
                     <div className="flex-1 bg-white border border-slate-300 rounded-2xl min-h-[36px] flex items-center px-3 shadow-sm">
-                      <input type="text" placeholder="iMessage" className="w-full text-[15px] bg-transparent outline-none py-1.5 text-black" />
+                      <input
+                        type="text"
+                        placeholder="Escribe un mensaje"
+                        className="w-full text-[15px] bg-transparent outline-none py-1.5 text-black"
+                        value={chatDraft}
+                        onChange={(e) => setChatDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            sendChatMessage();
+                          }
+                        }}
+                        disabled={!activeChatCampaignId || chatSending}
+                      />
                     </div>
-                    <button className="w-9 h-9 rounded-full bg-[#007aff] flex items-center justify-center shrink-0">
+                    <button
+                      className="w-9 h-9 rounded-full bg-[#007aff] flex items-center justify-center shrink-0 disabled:opacity-40"
+                      onClick={sendChatMessage}
+                      disabled={!activeChatCampaignId || !chatDraft.trim() || chatSending}
+                    >
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="translate-x-[-1px] translate-y-[1px]"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
                     </button>
                   </div>
@@ -1290,8 +1933,8 @@ export const AgentWorkspace: React.FC = () => {
                        <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="text-slate-300"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                      </div>
                    </div>
-                   <h2 className="text-[32px] font-extralight text-white mb-2">Cliente</h2>
-                   <p className="text-base text-slate-400 font-light tracking-[0.2em]">{callerId || phoneNumber || '+52 55 1234 5678'}</p>
+                   <h2 className="text-[32px] font-extralight text-white mb-2 text-center px-2 line-clamp-2">{crmSnapshot.displayName}</h2>
+                   <p className="text-base text-slate-400 font-light tracking-[0.08em] text-center truncate max-w-[90%]">{crmSnapshot.phone || callerId || phoneNumber || '—'}</p>
                 </div>
 
                 <div className="flex justify-center gap-5 w-full mt-auto mb-10 px-4">
@@ -1564,6 +2207,8 @@ export const AgentWorkspace: React.FC = () => {
         isOpen={isTeleprompterVisible} 
         onClose={() => setIsTeleprompterVisible(false)}
         autoPlay={true}
+        scriptSegments={teleprompterSegments}
+        allowDefaultFallback={false}
         settings={teleprompterSettings}
         onUpdateSetting={updateTeleprompterSetting}
       />

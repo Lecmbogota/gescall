@@ -4,7 +4,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { Button } from "../ui/button";
 import { Plus, Edit3, Trash2, Play, Loader2, FileSpreadsheet, Globe2, Lock as LockIcon, Search } from "lucide-react";
 import { toast } from "sonner";
-import { CustomReportBuilder, ReportTemplate } from "./CustomReportBuilder";
+import { CustomReportBuilder } from "./CustomReportBuilder";
+import type { ReportTemplate } from "./CustomReportBuilder";
 
 interface Props {
     onRun: (template: ReportTemplate) => void;

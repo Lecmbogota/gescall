@@ -192,6 +192,59 @@ class PgDatabaseService {
             throw error;
         }
     }
+
+    /**
+     * Métricas del turno para la vista agente (Fase 1): cola relacionada con sus campañas y llamadas hoy donde participó.
+     * @param {string} username
+     * @param {string[]} campaignIds IDs de lista asociados al usuario (vacío = mismo criterio global que dashboard)
+     */
+    async getAgentShiftMetrics(username, campaignIds = []) {
+        let queue_depth = 0;
+        try {
+            if (Array.isArray(campaignIds) && campaignIds.length > 0) {
+                const { rows } = await pg.query(`
+                    SELECT COUNT(*)::int AS c
+                    FROM gescall_leads l
+                    INNER JOIN gescall_lists ls ON l.list_id = ls.list_id
+                    WHERE ls.active = true
+                      AND ls.campaign_id = ANY($1::varchar[])
+                      AND (l.status = 'NEW' OR l.status = 'QUEUE')
+                `, [campaignIds]);
+                queue_depth = rows[0]?.c ?? 0;
+            } else {
+                const { rows } = await pg.query(`
+                    SELECT COUNT(*)::int AS c
+                    FROM gescall_leads l
+                    INNER JOIN gescall_lists ls ON l.list_id = ls.list_id
+                    WHERE ls.active = true AND (l.status = 'NEW' OR l.status = 'QUEUE')
+                `);
+                queue_depth = rows[0]?.c ?? 0;
+            }
+        } catch (e) {
+            console.error('[pgDatabaseService] getAgentShiftMetrics queue_depth:', e.message);
+        }
+
+        let calls_today = 0;
+        try {
+            const { rows } = await pg.query(`
+                SELECT COUNT(DISTINCT cl.log_id)::int AS c
+                FROM gescall_call_log cl
+                WHERE cl.call_date >= CURRENT_DATE
+                  AND (
+                    NULLIF(TRIM(cl.transferred_to), '') = $1
+                    OR EXISTS (
+                        SELECT 1 FROM gescall_typification_results tr
+                        WHERE tr.call_log_id = cl.log_id AND tr.agent_username = $1
+                    )
+                  )
+            `, [username]);
+            calls_today = rows[0]?.c ?? 0;
+        } catch (e) {
+            console.error('[pgDatabaseService] getAgentShiftMetrics calls_today:', e.message);
+        }
+
+        return { queue_depth, calls_today };
+    }
 }
 
 module.exports = new PgDatabaseService();

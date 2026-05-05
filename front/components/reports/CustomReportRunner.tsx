@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { ReportFilters, ReportFiltersValue } from "./ReportFilters";
 import { dispatchExport, ExportFormat } from "./exportHelpers";
-import { ReportTemplate } from "./CustomReportBuilder";
+import type { ReportTemplate } from "./CustomReportBuilder";
 
 interface ColumnMeta { id: string; label: string }
 

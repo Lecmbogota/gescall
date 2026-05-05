@@ -19,7 +19,6 @@ import {
   X,
   Star,
   Activity,
-  Music,
   ShieldBan,
   ListChecks,
   PhoneOutgoing,
@@ -28,19 +27,22 @@ import {
   PinOff,
   FileBarChart2,
   Workflow,
+  GitBranch,
   Network,
   Users,
   KeyRound,
   LifeBuoy,
   Mic,
   BookOpen,
-  Settings
+  Settings,
+  ClipboardList
 } from "lucide-react";
 import { cn } from "./ui/utils";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
 import { UserProfileModal } from "./UserProfileModal";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { BackgroundSocketManager } from "./BackgroundSocketManager";
+import { GlobalSupervisorChatWidget } from "./GlobalSupervisorChatWidget";
 import { toast } from "sonner";
 import logoURLPro from "./figma/logoURLPro.png";
 import { useAuthStore } from "@/stores/authStore";
@@ -60,7 +62,10 @@ interface MenuItem {
   icon: React.ElementType;
   shortcut?: string;
   shortcutKey?: string;
+  /** Si está definido, se exige ese permiso exacto. */
   requiredPermission?: string;
+  /** Si está definido (y no hay match por requiredPermission primero), basta con uno de la lista. */
+  requiredAnyPermission?: string[];
 }
 
 interface MenuGroup {
@@ -89,14 +94,6 @@ const MENU_GROUPS: MenuGroup[] = [
         requiredPermission: "manage_schedules",
       },
       {
-        id: "audio",
-        label: "Audios",
-        icon: Music,
-        shortcut: "Alt+A",
-        shortcutKey: "a",
-        requiredPermission: "manage_audio",
-      },
-      {
         id: "consolidated",
         label: "Reportes",
         icon: FileBarChart2,
@@ -111,6 +108,14 @@ const MENU_GROUPS: MenuGroup[] = [
         shortcut: "Alt+I",
         shortcutKey: "i",
         requiredPermission: "manage_ivr",
+      },
+      {
+        id: "agent-workspace-admin",
+        label: "Workspace agentes",
+        icon: ClipboardList,
+        shortcut: "Alt+W",
+        shortcutKey: "w",
+        requiredAnyPermission: ["manage_agent_workspace", "admin"],
       },
     ]
   },
@@ -163,6 +168,14 @@ const MENU_GROUPS: MenuGroup[] = [
         requiredPermission: "manage_trunks",
       },
       {
+        id: "routing-rules",
+        label: "Enrutamiento",
+        icon: GitBranch,
+        shortcut: "Alt+E",
+        shortcutKey: "e",
+        requiredPermission: "manage_routing",
+      },
+      {
         id: "users",
         label: "Usuarios",
         icon: Users,
@@ -212,14 +225,19 @@ export function DashboardLayout({
   >(null);
 
   const { hasRolePermission } = useAuthStore();
+  const canUseSupervisorChat =
+    hasRolePermission("manage_agent_workspace") || hasRolePermission("admin");
 
   // Filter menu groups based on user level and role permissions
   const menuGroups = useMemo(() => {
     return MENU_GROUPS.map((group) => {
       // Filter the items within the group
       const filteredItems = group.items.filter((item) => {
-        if (!item.requiredPermission) return true; // Show if no perm required
-        return hasRolePermission(item.requiredPermission); // Otherwise check role perm
+        if (item.requiredAnyPermission && item.requiredAnyPermission.length > 0) {
+          return item.requiredAnyPermission.some((p) => hasRolePermission(p));
+        }
+        if (!item.requiredPermission) return true;
+        return hasRolePermission(item.requiredPermission);
       });
 
       return {
@@ -231,7 +249,11 @@ export function DashboardLayout({
 
   // Load favorite menu from localStorage
   useEffect(() => {
-    const savedFavorite = localStorage.getItem("favoriteMenu");
+    let savedFavorite = localStorage.getItem("favoriteMenu");
+    if (savedFavorite === "audio") {
+      localStorage.removeItem("favoriteMenu");
+      savedFavorite = null;
+    }
     if (savedFavorite) {
       setFavoriteMenu(savedFavorite);
     }
@@ -616,6 +638,10 @@ export function DashboardLayout({
       {/* Background Services */}
       <BackgroundTasksPanel />
       <BackgroundSocketManager />
+      <GlobalSupervisorChatWidget
+        username={username}
+        enabled={currentPage !== 'agent-workspace' && canUseSupervisorChat}
+      />
 
       {/* User Profile Modal */}
       <UserProfileModal

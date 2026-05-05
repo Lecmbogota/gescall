@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-    Activity, ChevronDown, Clock, Info, ListChecks, Loader2, Mic, Phone, Repeat, Save, Tags, Zap,
+    Activity, ChevronDown, Clock, Info, ListChecks, Loader2, Mic, Phone, Repeat, Save, Tags, WandSparkles, Zap,
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -12,6 +12,8 @@ import { SectionTypifications } from "./SectionTypifications";
 import { SectionDispositions } from "./SectionDispositions";
 import { SectionCallerId } from "./SectionCallerId";
 import { SectionRecording } from "./SectionRecording";
+import { SectionTeleprompter } from "./SectionTeleprompter";
+import { PauseSettingsState, SectionPauses } from "./SectionPauses";
 
 export type CampaignSettingsSectionId =
     | "general"
@@ -21,7 +23,9 @@ export type CampaignSettingsSectionId =
     | "typifications"
     | "dispositions"
     | "callerid"
-    | "recording";
+    | "recording"
+    | "teleprompter"
+    | "pauses";
 
 interface SectionDef {
     id: CampaignSettingsSectionId;
@@ -33,25 +37,29 @@ interface SectionDef {
 
 const ALL_SECTIONS: SectionDef[] = [
     { id: "general",       label: "General",          description: "Resumen y configuración general",            icon: Info,        iconColor: "text-slate-500" },
-    { id: "dialing",       label: "Marcación",        description: "Ratio, troncal y predictivo",                 icon: Zap,         iconColor: "text-blue-500" },
+    { id: "dialing",       label: "Marcación",        description: "Ratio de marcación y predictivo",             icon: Zap,         iconColor: "text-blue-500" },
     { id: "retries",       label: "Reintentos",       description: "Intentos máx. y enfriamiento",                icon: Repeat,      iconColor: "text-purple-500" },
     { id: "schedule",      label: "Horario",          description: "Ventanas de discado",                         icon: Clock,       iconColor: "text-amber-500" },
     { id: "typifications", label: "Tipificaciones",   description: "Resultados y formularios",                    icon: Tags,        iconColor: "text-rose-500" },
     { id: "dispositions",  label: "Disposiciones",    description: "Catálogo de resultados",                      icon: ListChecks,  iconColor: "text-cyan-500" },
     { id: "callerid",      label: "CallerID",         description: "Local Presence",                              icon: Phone,       iconColor: "text-slate-500" },
     { id: "recording",     label: "Grabación",        description: "Grabación y almacenamiento",                  icon: Mic,         iconColor: "text-red-500" },
+    { id: "teleprompter",  label: "Teleprompter",     description: "Guion para agentes",                          icon: WandSparkles, iconColor: "text-amber-500" },
+    { id: "pauses",        label: "Pausas",           description: "Pausas permitidas y duración",                icon: Clock,       iconColor: "text-rose-500" },
 ];
 
 function sectionsForType(type?: string): CampaignSettingsSectionId[] {
     if (type === "INBOUND") {
-        return ["general", "typifications", "dispositions", "recording"];
+        return ["general", "typifications", "dispositions", "recording", "teleprompter", "pauses"];
     }
     if (type === "BLASTER") {
         // En BLASTER no hay agentes ni CallerID rotativo personalizado
         return ["general", "dialing", "retries", "schedule", "typifications", "dispositions", "recording"];
     }
-    // OUTBOUND y OUTBOUND_PREDICTIVE
-    return ["general", "dialing", "retries", "schedule", "typifications", "dispositions", "callerid", "recording"];
+    if (type === "OUTBOUND_PROGRESSIVE" || type === "OUTBOUND_PREDICTIVE") {
+        return ["general", "dialing", "retries", "schedule", "typifications", "dispositions", "callerid", "recording", "teleprompter", "pauses"];
+    }
+    return ["general", "dialing", "retries", "schedule", "typifications", "dispositions", "callerid", "recording", "teleprompter"];
 }
 
 interface CampaignSummary {
@@ -67,17 +75,15 @@ interface CampaignSummary {
     maxRetries?: number;
 }
 
-interface Trunk { trunk_id: string; trunk_name: string; }
-
 export interface CampaignSettingsTabProps {
     campaign: CampaignSummary;
+
+    /* General — troncal efectiva (resuelta por módulo Enrutamiento) */
+    outboundTrunkSummary?: string | null;
 
     /* General/Marcación */
     dialLevel: string;
     setDialLevel: (v: string) => void;
-    selectedTrunkId: string;
-    setSelectedTrunkId: (v: string) => void;
-    availableTrunks: Trunk[];
     cpsAvailability: { total_cps: number; used_cps: number; available_cps: number } | null;
 
     /* Predictivo */
@@ -87,6 +93,8 @@ export interface CampaignSettingsTabProps {
     setPredMinFactor: (v: number) => void;
     predMaxFactor: number;
     setPredMaxFactor: (v: number) => void;
+    amdEnabled: boolean;
+    setAmdEnabled: (v: boolean) => void;
 
     /* Reintentos */
     maxRetries: number;
@@ -103,7 +111,7 @@ export interface CampaignSettingsTabProps {
     scheduleTemplateDirty: boolean;
     onSaveScheduleTemplate: () => void;
 
-    /* Save general (dial + retries + trunk + predictive) */
+    /* Save general (dial + retries + predictive) */
     hasConfigChanges: boolean;
     savingGeneral: boolean;
     onSaveGeneralSettings: () => void;
@@ -141,6 +149,33 @@ export interface CampaignSettingsTabProps {
     onTestRecordingConnection: () => void;
     onSaveRecordingSettings: () => void;
     invalidateRecordingApproved: () => void;
+    teleprompterTemplate: string;
+    setTeleprompterTemplate: (v: string) => void;
+    teleprompterDayparts: {
+        day: string;
+        afternoon: string;
+        night: string;
+        day_start: number;
+        day_end: number;
+        afternoon_start: number;
+        afternoon_end: number;
+        night_start: number;
+        night_end: number;
+    };
+    setTeleprompterDayparts: (v: {
+        day: string;
+        afternoon: string;
+        night: string;
+        day_start: number;
+        day_end: number;
+        afternoon_start: number;
+        afternoon_end: number;
+        night_start: number;
+        night_end: number;
+    }) => void;
+    leadStructureFields?: string[];
+    pauseSettings: PauseSettingsState;
+    setPauseSettings: (v: PauseSettingsState | ((prev: PauseSettingsState) => PauseSettingsState)) => void;
 }
 
 export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
@@ -151,18 +186,12 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
 
     const [active, setActive] = useState<CampaignSettingsSectionId>(sections[0]?.id ?? "general");
 
-    const selectedTrunkLabel = useMemo(() => {
-        if (!props.selectedTrunkId || props.selectedTrunkId === "__none__") return null;
-        const t = props.availableTrunks.find((x) => x.trunk_id === props.selectedTrunkId);
-        return t ? `${t.trunk_name} (${t.trunk_id})` : props.selectedTrunkId;
-    }, [props.selectedTrunkId, props.availableTrunks]);
-
     const scheduleTemplateName = useMemo(() => {
         const tpl = props.scheduleTemplates.find((t) => t.id === props.scheduleTemplateId);
         return tpl?.name ?? null;
     }, [props.scheduleTemplates, props.scheduleTemplateId]);
 
-    const SECTIONS_AFFECTING_GENERAL_SAVE: CampaignSettingsSectionId[] = ["dialing", "retries"];
+    const SECTIONS_AFFECTING_GENERAL_SAVE: CampaignSettingsSectionId[] = ["dialing", "retries", "teleprompter", "pauses"];
     const showOperationalFooter =
         props.hasConfigChanges && SECTIONS_AFFECTING_GENERAL_SAVE.includes(active);
 
@@ -172,7 +201,7 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                 return (
                     <SectionGeneral
                         campaign={props.campaign}
-                        selectedTrunkLabel={selectedTrunkLabel}
+                        outboundTrunkSummary={props.outboundTrunkSummary}
                         scheduleTemplateName={scheduleTemplateName}
                     />
                 );
@@ -182,9 +211,6 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                         campaignType={props.campaign.campaign_type}
                         dialLevel={props.dialLevel}
                         setDialLevel={props.setDialLevel}
-                        selectedTrunkId={props.selectedTrunkId}
-                        setSelectedTrunkId={props.setSelectedTrunkId}
-                        availableTrunks={props.availableTrunks}
                         cpsAvailability={props.cpsAvailability}
                         predTargetDropRate={props.predTargetDropRate}
                         setPredTargetDropRate={props.setPredTargetDropRate}
@@ -192,6 +218,8 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                         setPredMinFactor={props.setPredMinFactor}
                         predMaxFactor={props.predMaxFactor}
                         setPredMaxFactor={props.setPredMaxFactor}
+                        amdEnabled={props.amdEnabled}
+                        setAmdEnabled={props.setAmdEnabled}
                     />
                 );
             case "retries":
@@ -257,6 +285,25 @@ export function CampaignSettingsTab(props: CampaignSettingsTabProps) {
                         onTestConnection={props.onTestRecordingConnection}
                         onSave={props.onSaveRecordingSettings}
                         invalidateApproved={props.invalidateRecordingApproved}
+                    />
+                );
+            case "teleprompter":
+                return (
+                    <SectionTeleprompter
+                        template={props.teleprompterTemplate}
+                        setTemplate={props.setTeleprompterTemplate}
+                        campaignType={props.campaign.campaign_type}
+                        leadStructureFields={props.leadStructureFields}
+                        dayparts={props.teleprompterDayparts}
+                        setDayparts={props.setTeleprompterDayparts}
+                    />
+                );
+            case "pauses":
+                return (
+                    <SectionPauses
+                        settings={props.pauseSettings}
+                        setSettings={props.setPauseSettings}
+                        campaignType={props.campaign.campaign_type}
                     />
                 );
         }

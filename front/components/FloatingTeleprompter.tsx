@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TeleprompterSettings } from '../hooks/useTeleprompterSettings';
 
@@ -6,6 +6,8 @@ interface FloatingTeleprompterProps {
   isOpen: boolean;
   onClose: () => void;
   autoPlay?: boolean;
+  scriptSegments?: string[];
+  allowDefaultFallback?: boolean;
   settings: TeleprompterSettings;
   onUpdateSetting: <K extends keyof TeleprompterSettings>(key: K, value: TeleprompterSettings[K]) => void;
 }
@@ -24,7 +26,15 @@ const normalizeString = (str: string) => {
   return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\s]/gi, '');
 };
 
-export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settings, onUpdateSetting }: FloatingTeleprompterProps) {
+export function FloatingTeleprompter({
+  isOpen,
+  onClose,
+  autoPlay = false,
+  scriptSegments,
+  allowDefaultFallback = true,
+  settings,
+  onUpdateSetting,
+}: FloatingTeleprompterProps) {
   const [isPlaying, setIsPlaying] = useState(autoPlay);
   const [activeSegmentIndex, setActiveSegmentIndex] = useState(0);
   const [micPermissionError, setMicPermissionError] = useState(false);
@@ -47,6 +57,11 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
   }, []);
 
   const { voiceMode, speed, fontSize, opacity, textColor } = settings;
+  const segments = useMemo(() => {
+    const clean = (scriptSegments || []).map((s) => s.trim()).filter(Boolean);
+    if (clean.length) return clean;
+    return allowDefaultFallback ? SCRIPT_SEGMENTS : [];
+  }, [scriptSegments, allowDefaultFallback]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -163,8 +178,8 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
       setCurrentTranscript(rawFull);
       const fullTranscript = normalizeString(rawFull);
       
-      if (activeSegmentIndex < SCRIPT_SEGMENTS.length - 1) {
-        const nextSegment = normalizeString(SCRIPT_SEGMENTS[activeSegmentIndex + 1]);
+      if (activeSegmentIndex < segments.length - 1) {
+        const nextSegment = normalizeString(segments[activeSegmentIndex + 1]);
         const words = nextSegment.split(' ').filter(w => w.length >= 4); 
         
         let matchCount = 0;
@@ -177,8 +192,8 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
           transcriptBuffer.current = '';
           setCurrentTranscript('');
         }
-      } else if (activeSegmentIndex === SCRIPT_SEGMENTS.length - 1) {
-        const lastSegment = normalizeString(SCRIPT_SEGMENTS[activeSegmentIndex]);
+      } else if (activeSegmentIndex === segments.length - 1) {
+        const lastSegment = normalizeString(segments[activeSegmentIndex]);
         const words = lastSegment.split(' ').filter(w => w.length >= 4); 
         
         let matchCount = 0;
@@ -212,7 +227,7 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
     return () => {
       try { recognition.stop(); } catch(e){}
     };
-  }, [voiceMode, isOpen, activeSegmentIndex]);
+  }, [voiceMode, isOpen, activeSegmentIndex, segments, onUpdateSetting, onClose]);
 
   useEffect(() => {
     if (!voiceMode) return;
@@ -231,6 +246,12 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
       exactScrollRef.current = Math.max(0, targetScroll);
     }
   }, [activeSegmentIndex, voiceMode]);
+
+  useEffect(() => {
+    if (activeSegmentIndex >= segments.length) {
+      setActiveSegmentIndex(Math.max(segments.length - 1, 0));
+    }
+  }, [segments, activeSegmentIndex]);
 
   if (!isOpen) return null;
 
@@ -330,7 +351,7 @@ export function FloatingTeleprompter({ isOpen, onClose, autoPlay = false, settin
             style={{ fontSize: `${fontSize}px` }}
           >
             <div className={`max-w-xl mx-auto space-y-12 text-center font-medium leading-relaxed tracking-wide ${textColor}`}>
-              {SCRIPT_SEGMENTS.map((segment, index) => {
+              {segments.map((segment, index) => {
                 const isActive = activeSegmentIndex === index;
                 const isPast = index < activeSegmentIndex;
                 

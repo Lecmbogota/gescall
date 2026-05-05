@@ -58,6 +58,7 @@ const PERMISSION_CATEGORIES = [
             { id: 'manage_blacklist', label: 'Gestionar Blacklist', desc: 'Permite la gestión de números bloqueados (DNC)' },
             { id: 'manage_tts_nodes', label: 'Gestión de Nodos TTS', desc: 'Permite configurar y administrar los nodos de Text-to-Speech' },
             { id: 'manage_schedules', label: 'Horarios', desc: 'Permite crear y asignar horarios reutilizables a las campañas' },
+            { id: 'manage_agent_workspace', label: 'Workspace de agentes', desc: 'Avisos supervisor, callbacks y vista operativa enlazada al panel del agente' },
         ]
     },
     {

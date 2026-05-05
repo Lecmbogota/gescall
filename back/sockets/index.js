@@ -1,10 +1,21 @@
 const uploadTaskService = require('../services/uploadTaskService');
 const pgDatabase = require('../config/pgDatabase');
 const { exec } = require('child_process');
+const { syncAgentPauseSegments } = require('../services/agentPauseSegmentsSync');
+
 module.exports = function(io, { databaseService }) {
   const activeUploads = new Set();
   const pausedUploads = new Set();
   const redis = require('../config/redisClient'); // Import Redis Client
+  const chatRoomParticipants = new Map(); // room -> Map(socketId -> { role, username })
+
+  /**
+   * Pausas que se registran en BD para reportes. Excluye PAUSE_PENDING (modal de PIN sin confirmar).
+   */
+  function isLoggedPauseState(s) {
+    const u = String(s || '').toUpperCase();
+    return u === 'NOT_READY' || u.startsWith('NOT_READY_') || u === 'PAUSED' || u === 'BREAK';
+  }
 
   // Cache SIP extension statuses to avoid hammering Asterisk on every 5s tick
   let extensionStatusCache = {}; // { ext: 'Online'|'Offline'|'N/A' }
@@ -231,11 +242,47 @@ module.exports = function(io, { databaseService }) {
           ? (timestamp || Date.now())
           : (prevLastChange || timestamp || Date.now());
 
+        if (stateChanged) {
+          const camp = campaignId || prev.campaign_id || null;
+          await syncAgentPauseSegments(username, prevState, newState, camp, lastChange);
+        }
+
+        // Tiempo logueado del turno (acum + segmento actual en línea); reinicia al cambiar día UTC
+        const now = Date.now();
+        const today = new Date().toISOString().slice(0, 10);
+        let shift_day = prev.shift_day || today;
+        let shift_accum_sec = parseInt(prev.shift_accum_sec || '0', 10) || 0;
+        let shift_segment_start = parseInt(prev.shift_segment_start || '0', 10) || 0;
+
+        if (shift_day !== today) {
+          shift_day = today;
+          shift_accum_sec = 0;
+          const prevWasOnline = prevState && prevState !== 'OFFLINE' && prevState !== 'UNKNOWN';
+          shift_segment_start =
+            prevWasOnline && newState !== 'OFFLINE' && newState !== 'UNKNOWN' ? now : 0;
+        }
+
+        const wasOnline = prevState && prevState !== 'OFFLINE' && prevState !== 'UNKNOWN';
+        const isOnline = newState !== 'OFFLINE' && newState !== 'UNKNOWN';
+
+        if (wasOnline && !isOnline && shift_segment_start > 0) {
+          shift_accum_sec += Math.floor((now - shift_segment_start) / 1000);
+          shift_segment_start = 0;
+        }
+        if (!wasOnline && isOnline) {
+          shift_segment_start = now;
+        }
+
         const payload = {
           state: newState,
           last_change: lastChange,
-          socket_id: socket.id
+          socket_id: socket.id,
+          shift_day,
+          shift_accum_sec: String(shift_accum_sec)
         };
+        if (shift_segment_start > 0) {
+          payload.shift_segment_start = String(shift_segment_start);
+        }
         // El dialer predictivo/progresivo (Go) cuenta agentes READY con campaign_ids o campaign_id.
         // Sin esto, había una ventana donde solo existía state=READY y el marcador veía readyCount=0
         // hasta que enrichWithCampaignIds terminaba la consulta a Postgres.
@@ -244,6 +291,9 @@ module.exports = function(io, { databaseService }) {
           payload.campaign_ids = String(campaignId);
         }
         await redis.hSet(`gescall:agent:${username}`, payload);
+        if (!payload.shift_segment_start) {
+          await redis.hDel(`gescall:agent:${username}`, 'shift_segment_start').catch(() => {});
+        }
 
         // Asynchronously enrich with campaign_ids from DB (non-blocking for state write)
         enrichWithCampaignIds(username, campaignId);
@@ -280,10 +330,30 @@ module.exports = function(io, { databaseService }) {
           const prev = await redis.hGetAll(`gescall:agent:${socket.agentUsername}`).catch(() => ({}));
           const prevLastChange = prev && prev.last_change ? parseInt(prev.last_change, 10) : 0;
           const lastChange = prevLastChange || Date.now();
+          const prevState = prev && prev.state ? String(prev.state) : '';
+          const now = Date.now();
+          const today = new Date().toISOString().slice(0, 10);
+          let shift_day = prev.shift_day || today;
+          let shift_accum_sec = parseInt(prev.shift_accum_sec || '0', 10) || 0;
+          let shift_segment_start = parseInt(prev.shift_segment_start || '0', 10) || 0;
+          if (shift_day !== today) {
+            shift_day = today;
+            shift_accum_sec = 0;
+            shift_segment_start = 0;
+          }
+          const wasOnline = prevState && prevState !== 'OFFLINE' && prevState !== 'UNKNOWN';
+          if (wasOnline && shift_segment_start > 0) {
+            shift_accum_sec += Math.floor((now - shift_segment_start) / 1000);
+          }
+          const prevCamp = prev.campaign_id || null;
+          await syncAgentPauseSegments(socket.agentUsername, prevState, 'OFFLINE', prevCamp, now);
           await redis.hSet(`gescall:agent:${socket.agentUsername}`, {
             state: 'OFFLINE',
-            last_change: lastChange
+            last_change: lastChange,
+            shift_day,
+            shift_accum_sec: String(shift_accum_sec)
           });
+          await redis.hDel(`gescall:agent:${socket.agentUsername}`, 'shift_segment_start').catch(() => {});
           io.emit('dashboard:realtime:update', {
             timestamp: new Date().toISOString(),
             agent_update: { username: socket.agentUsername, state: 'OFFLINE', last_change: lastChange, extension_status: extensionStatusCache[socket.agentUsername] || 'N/A' }
@@ -293,7 +363,96 @@ module.exports = function(io, { databaseService }) {
         }
       }
     });
+
+    socket.on('agent:workspace:subscribe', async (data) => {
+      const username = data && data.username ? String(data.username) : '';
+      if (!username) return;
+      try {
+        await socket.join(`${AGENT_METRICS_ROOM_PREFIX}${username}`);
+        const metrics = await buildAgentWorkspaceMetrics(username);
+        socket.emit('agent:workspace:metrics', metrics);
+      } catch (e) {
+        console.error('[Socket.IO] agent:workspace:subscribe:', e.message);
+      }
+    });
+
+    socket.on('agent:workspace:unsubscribe', async (data) => {
+      const username = data && data.username ? String(data.username) : '';
+      if (!username) return;
+      try {
+        socket.leave(`${AGENT_METRICS_ROOM_PREFIX}${username}`);
+      } catch (_) {}
+    });
+
+    socket.on('agent:workspace:chat:subscribe', async (data) => {
+      const campaignId = data && data.campaign_id ? String(data.campaign_id) : '';
+      const agentUsername = data && data.agent_username ? String(data.agent_username) : '';
+      const participantRole = data && data.participant_role ? String(data.participant_role).toUpperCase() : '';
+      const participantUsername = data && data.participant_username ? String(data.participant_username) : '';
+      if (!campaignId || !agentUsername) return;
+      const roomName = `agent-workspace-chat:${campaignId}:${agentUsername}`;
+      try {
+        socket.join(roomName);
+        if (!chatRoomParticipants.has(roomName)) {
+          chatRoomParticipants.set(roomName, new Map());
+        }
+        const participants = chatRoomParticipants.get(roomName);
+        participants.set(socket.id, {
+          role: participantRole === 'SUPERVISOR' ? 'SUPERVISOR' : 'AGENT',
+          username: participantUsername || null,
+        });
+        if (!socket.chatRooms) socket.chatRooms = new Set();
+        socket.chatRooms.add(roomName);
+        broadcastChatPresence(roomName);
+      } catch (_) {}
+    });
+
+    socket.on('agent:workspace:chat:unsubscribe', async (data) => {
+      const campaignId = data && data.campaign_id ? String(data.campaign_id) : '';
+      const agentUsername = data && data.agent_username ? String(data.agent_username) : '';
+      if (!campaignId || !agentUsername) return;
+      const roomName = `agent-workspace-chat:${campaignId}:${agentUsername}`;
+      try {
+        socket.leave(roomName);
+        removeChatParticipant(roomName, socket.id);
+      } catch (_) {}
+    });
+
+    socket.on('disconnect', () => {
+      try {
+        if (!socket.chatRooms || socket.chatRooms.size === 0) return;
+        for (const roomName of socket.chatRooms.values()) {
+          removeChatParticipant(roomName, socket.id);
+        }
+      } catch (_) {}
+    });
   });
+
+  function removeChatParticipant(roomName, socketId) {
+    const participants = chatRoomParticipants.get(roomName);
+    if (!participants) return;
+    participants.delete(socketId);
+    if (participants.size === 0) {
+      chatRoomParticipants.delete(roomName);
+      return;
+    }
+    broadcastChatPresence(roomName);
+  }
+
+  function broadcastChatPresence(roomName) {
+    const participants = chatRoomParticipants.get(roomName);
+    const values = participants ? Array.from(participants.values()) : [];
+    const supervisor_online = values.some((p) => p.role === 'SUPERVISOR');
+    const agent_online = values.some((p) => p.role === 'AGENT');
+    io.to(roomName).emit('agent:workspace:chat:presence', {
+      room: roomName,
+      supervisor_online,
+      agent_online,
+      supervisor_count: values.filter((p) => p.role === 'SUPERVISOR').length,
+      agent_count: values.filter((p) => p.role === 'AGENT').length,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   // Async background task: enrich agent Redis key with campaign_ids from DB.
   // Runs after the state write to avoid blocking the critical path.
@@ -329,7 +488,45 @@ module.exports = function(io, { databaseService }) {
       }
     }
   }
-  
+
+  const AGENT_METRICS_ROOM_PREFIX = 'agent-metrics:';
+
+  async function buildAgentWorkspaceMetrics(username) {
+    const agent = await redis.hGetAll(`gescall:agent:${username}`).catch(() => ({}));
+    const campaignIdsRaw = agent.campaign_ids || agent.campaign_id || '';
+    const campaignIds = String(campaignIdsRaw).split(',').map((s) => s.trim()).filter(Boolean);
+
+    let dbPart = { queue_depth: 0, calls_today: 0 };
+    try {
+      dbPart = await databaseService.getAgentShiftMetrics(username, campaignIds);
+    } catch (e) {
+      console.error('[Socket.IO] getAgentShiftMetrics:', e.message);
+    }
+
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+    let shift_accum_sec = parseInt(agent.shift_accum_sec || '0', 10) || 0;
+    const shift_day = agent.shift_day || today;
+    const seg = parseInt(agent.shift_segment_start || '0', 10) || 0;
+    const st = agent.state || 'OFFLINE';
+    const isOnline = st !== 'OFFLINE' && st !== 'UNKNOWN';
+
+    let logged_seconds = shift_accum_sec;
+    if (shift_day !== today) {
+      logged_seconds = 0;
+    } else if (isOnline && seg > 0) {
+      logged_seconds += Math.floor((now - seg) / 1000);
+    }
+
+    return {
+      username,
+      logged_seconds,
+      calls_today: dbPart.calls_today,
+      queue_depth: dbPart.queue_depth,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   setInterval(async () => {
     tickCounter++;
     const broadcast = { timestamp: new Date().toISOString() };
@@ -385,6 +582,25 @@ module.exports = function(io, { databaseService }) {
       }
     } catch (e) {
       console.error('[Socket.IO] Campaign room broadcast error:', e.message);
+    }
+
+    // Métricas de turno por agente (vista workspace)
+    try {
+      if (io.sockets.adapter.rooms) {
+        for (const [roomName] of io.sockets.adapter.rooms.entries()) {
+          if (!roomName.startsWith(AGENT_METRICS_ROOM_PREFIX)) continue;
+          const username = roomName.slice(AGENT_METRICS_ROOM_PREFIX.length);
+          if (!username) continue;
+          try {
+            const metrics = await buildAgentWorkspaceMetrics(username);
+            io.to(roomName).emit('agent:workspace:metrics', metrics);
+          } catch (innerE) {
+            console.error(`[Socket.IO] agent metrics ${username}:`, innerE.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Socket.IO] Agent workspace metrics broadcast:', e.message);
     }
   }, 5000);
 };

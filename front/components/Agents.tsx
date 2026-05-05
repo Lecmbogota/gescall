@@ -139,11 +139,16 @@ export function Agents({ username }: AgentsProps) {
 
   // Map agent_state to user-friendly display
   const getAgentStateInfo = (state: string) => {
+    const u = (state || '').toUpperCase();
+    if (u.startsWith('NOT_READY')) {
+      return { label: 'EN PAUSA', color: 'bg-blue-100 text-blue-700', dot: 'bg-blue-500' };
+    }
     switch (state) {
       case 'READY': case 'WAITING': return { label: 'DISPONIBLE', color: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' };
       case 'ON_CALL': case 'INCALL': return { label: 'EN LLAMADA', color: 'bg-red-100 text-red-700', dot: 'bg-red-500' };
       case 'ACW': case 'WRAPUP': return { label: 'CIERRE', color: 'bg-orange-100 text-orange-700', dot: 'bg-orange-500' };
       case 'PAUSED': case 'BREAK': case 'NOT_READY': return { label: 'EN PAUSA', color: 'bg-blue-100 text-blue-700', dot: 'bg-blue-500' };
+      case 'PAUSE_PENDING': return { label: 'AUTORIZANDO PAUSA', color: 'bg-indigo-100 text-indigo-800', dot: 'bg-indigo-400' };
       case 'RINGING': return { label: 'TIMBRANDO', color: 'bg-purple-100 text-purple-700', dot: 'bg-purple-500' };
       case 'DIALING': return { label: 'MARCANDO', color: 'bg-cyan-100 text-cyan-700', dot: 'bg-cyan-500' };
       case 'OFFLINE': return { label: 'DESCONECTADO', color: 'bg-slate-100 text-slate-500', dot: 'bg-slate-400' };
