@@ -379,6 +379,25 @@ async function handleStasisStart(event, channel) {
                 if (agentVar && agentVar.value) {
                     await redis.hSet(`gescall:agent:${agentVar.value}`, 'state', 'ON_CALL');
                 }
+
+                // Notify the agent's workspace which campaign this call belongs to.
+                // Use in-memory waiterState (no ARI variable read — avoids timing issues).
+                const agentName = agentVar?.value || '';
+                const callCampaignId = waiterState?.campaignId || '';
+                const callLeadId = waiterState?.leadId || 0;
+                const callPhone = waiterState?.phone || '';
+                if (io && agentName && callCampaignId) {
+                    console.log(`[Queue] Emitting agent:call:assigned → agent=${agentName} campaign=${callCampaignId} lead=${callLeadId}`);
+                    io.emit('agent:call:assigned', {
+                        username: agentName,
+                        campaign_id: callCampaignId,
+                        lead_id: String(callLeadId),
+                        phone_number: callPhone,
+                        timestamp: Date.now()
+                    });
+                } else {
+                    console.log(`[Queue] SKIP agent:call:assigned — io=${!!io} agentName="${agentName}" campaignId="${callCampaignId}"`);
+                }
             }
         } catch (err) {
             console.error(`[Queue] Agent answer error:`, err.message);
@@ -581,6 +600,7 @@ async function handleStasisStart(event, channel) {
         let mohClass = null;
         let mohCustomFile = null;
         let recordingFilename = null;
+        let campaignName = (campaignId || 'unknown').replace(/\s+/g, '_');
         if (campaignId) {
             try {
                 const mohRows = await pg.query(
@@ -593,9 +613,8 @@ async function handleStasisStart(event, channel) {
                     
                     // Resolve recording filename pattern
                     const recSettings = mohRows.rows[0].recording_settings || {};
+                    campaignName = (mohRows.rows[0].campaign_name || campaignId).replace(/\s+/g, '_');
                     if (recSettings.enabled !== false && recSettings.filename_pattern) {
-                        const campaignName = (mohRows.rows[0].campaign_name || campaignId).replace(/\s+/g, '_');
-                        
                         // Get timezone from system settings, default America/Bogota
                         let tz = 'America/Bogota';
                         try {
@@ -685,6 +704,7 @@ async function handleStasisStart(event, channel) {
             isNative, // Flag indicating if call uses PostgreSQL
             trunkId: customVars['trunk_id'] || null,
             recordingFilename, // Resolved recording filename from campaign settings
+            campaignName, // Campaign name for folder structure
             mohClass,
             mohCustomFile,
             campaignType,
@@ -778,7 +798,7 @@ async function handleStasisStart(event, channel) {
     }
 }
 
-function handleStasisEnd(event, channel) {
+async function handleStasisEnd(event, channel) {
     const channelId = channel.id;
     const callState = activeCalls.get(channelId);
     console.log(`[ARI] StasisEnd: channel=${channelId}`);
@@ -786,6 +806,15 @@ function handleStasisEnd(event, channel) {
     if (callState) {
         // Mark as hung up FIRST — this propagates to executeFlow via the callState reference
         callState.hungUp = true;
+
+        // Capture hangup cause to determine who hung up
+        try {
+            const causeVar = await channel.getChannelVar({ variable: 'HANGUPCAUSE' });
+            if (causeVar && causeVar.value) {
+                callState.hangupCause = causeVar.value;
+                console.log(`[ARI] Hangup cause for ${channelId}: ${causeVar.value}`);
+            }
+        } catch (e) { /* variable not available */ }
 
         // Resolve any pending DTMF wait
         if (callState.dtmfResolve) {
@@ -2126,35 +2155,49 @@ async function logToGescall(callState, status, dtmf, duration) {
             const channelId = callState.channel?.id || '';
             const pgUpdateResult = await pg.query(
                 `UPDATE gescall_call_log 
-                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7)
+                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7), hangup_cause = $8
                  WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
                  RETURNING log_id`,
-                [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId]
+                [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId, callState.hangupCause || null]
             );
 
             if (pgUpdateResult.rowCount === 0) {
                 await pg.query(
                     `INSERT INTO gescall_call_log
-                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id, call_direction, uniqueid)
-                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10)`,
-                    [callState.leadId || 0, phone, callState.campaignId, callState.listId || 0, status, duration, dtmf || '0', callState.trunkId, callDirection, channelId]
+                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id, call_direction, uniqueid, hangup_cause)
+                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11)`,
+                    [callState.leadId || 0, phone, callState.campaignId, callState.listId || 0, status, duration, dtmf || '0', callState.trunkId, callDirection, channelId, callState.hangupCause || null]
                 );
             }
 
             // Rename recording file to campaign naming pattern
+            // Saves into: YYYY/MM/DD/campaignName/filename.wav
             if (callState.recordingFilename && channelId) {
                 const fs = require('fs');
                 const recPath = '/var/spool/asterisk/recording';
                 const srcFile = path.join(recPath, `${channelId}.wav`);
-                const dstFile = path.join(recPath, `${callState.recordingFilename}.wav`);
                 try {
                     if (fs.existsSync(srcFile)) {
+                        // Build folder hierarchy: YYYY/MM/DD/campaignName/
+                        const now = new Date();
+                        const year = now.getFullYear().toString();
+                        const month = String(now.getMonth() + 1).padStart(2, '0');
+                        const day = String(now.getDate()).padStart(2, '0');
+                        const campaignName = callState.campaignName || callState.campaignId || 'unknown';
+                        const folderPath = path.join(recPath, year, month, day, campaignName);
+                        
+                        fs.mkdirSync(folderPath, { recursive: true });
+                        
+                        const dstFile = path.join(folderPath, `${callState.recordingFilename}.wav`);
                         fs.renameSync(srcFile, dstFile);
-                        console.log(`[ARI] Recording renamed: ${channelId}.wav → ${callState.recordingFilename}.wav`);
-                        // Update uniqueid in call log to the new filename
+                        
+                        // Store relative path from recordings root
+                        const relativePath = `${year}/${month}/${day}/${campaignName}/${callState.recordingFilename}`;
+                        console.log(`[ARI] Recording saved: ${relativePath}.wav`);
+                        
                         await pg.query(
                             `UPDATE gescall_call_log SET uniqueid = $1 WHERE uniqueid = $2 AND call_date >= NOW() - INTERVAL '10 minutes'`,
-                            [callState.recordingFilename, channelId]
+                            [relativePath, channelId]
                         );
                     }
                 } catch (renameErr) {

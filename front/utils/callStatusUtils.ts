@@ -212,7 +212,7 @@ export function translateLeadStatus(status: string): { label: string; descriptio
         'AB': { label: 'Auto Ocupado', description: 'Ocupado automático' },
         'DROP': { label: 'Cortada', description: 'Conexión interrumpida' },
         'XDROP': { label: 'Cortada', description: 'Conexión interrumpida' },
-        'PDROP': { label: 'Perdida', description: 'Conexión perdida' },
+        'PDROP': { label: 'Perdida', description: 'Perdida por marcador predictivo (sin agente disponible)' },
         'AM': { label: 'Buzón', description: 'Contestadora automática' },
         'AL': { label: 'Buzón Largo', description: 'Mensaje largo detectado' },
         'AFAX': { label: 'Fax', description: 'Línea de fax detectada' },

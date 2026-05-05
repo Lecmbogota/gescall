@@ -125,15 +125,16 @@ app.get('/health', (req, res) => {
 
 // Audio recordings don't need JWT (WaveSurfer fetches directly from browser)
 // This inline route bypasses JWT for recording file playback
+// Supports subdirectory paths like 2026/05/02/campaign_name/file.wav
 const path = require('path');
 const fs2 = require('fs');
-app.get('/api/audio/recordings/:filename', (req, res) => {
-    const { filename } = req.params;
-    if (filename.includes('/') || filename.includes('..')) {
+app.get('/api/audio/recordings/*', (req, res) => {
+    const subPath = req.params[0] || '';
+    if (subPath.includes('..')) {
         return res.status(400).send('Invalid filename');
     }
     const recordingsPath = '/var/spool/asterisk/recording';
-    const filePath = path.join(recordingsPath, filename);
+    const filePath = path.join(recordingsPath, subPath);
     if (!fs2.existsSync(filePath)) {
         return res.status(404).json({ success: false, error: 'Recording not found' });
     }
@@ -180,6 +181,7 @@ app.use('/api/tickets', ticketsRoutes(io));
 app.use('/api/metrics', require('./routes/metrics'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/typifications', require('./routes/typifications'));
+app.use('/api/dispositions', require('./routes/dispositions'));
 
 app.get('/api/docs.json', async (req, res) => {
   try {

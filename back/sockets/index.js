@@ -219,15 +219,26 @@ module.exports = function(io, { databaseService }) {
         // Save socket reference to easily handle disconnect
         socket.agentUsername = username;
         
+        // Write state to Redis IMMEDIATELY (before any slow DB query)
+        // This prevents a race condition where disconnect sets OFFLINE first
+        // and then the state update overwrites it back to READY.
         const payload = {
           state: state || 'UNKNOWN',
           last_change: timestamp || Date.now(),
           socket_id: socket.id
         };
-        if (campaignId) payload.campaign_id = campaignId;
-
+        // El dialer predictivo/progresivo (Go) cuenta agentes READY con campaign_ids o campaign_id.
+        // Sin esto, había una ventana donde solo existía state=READY y el marcador veía readyCount=0
+        // hasta que enrichWithCampaignIds terminaba la consulta a Postgres.
+        if (campaignId) {
+          payload.campaign_id = String(campaignId);
+          payload.campaign_ids = String(campaignId);
+        }
         await redis.hSet(`gescall:agent:${username}`, payload);
-        
+
+        // Asynchronously enrich with campaign_ids from DB (non-blocking for state write)
+        enrichWithCampaignIds(username, campaignId);
+
         // Look up SIP extension to include status in the broadcast
         let extensionStatus = 'N/A';
         try {
@@ -269,6 +280,41 @@ module.exports = function(io, { databaseService }) {
       }
     });
   });
+
+  // Async background task: enrich agent Redis key with campaign_ids from DB.
+  // Runs after the state write to avoid blocking the critical path.
+  async function enrichWithCampaignIds(username, fallbackCampaignId) {
+    try {
+      const { rows: campRows } = await pgDatabase.query(
+        `SELECT uc.campaign_id 
+         FROM gescall_user_campaigns uc
+         JOIN gescall_campaigns c ON uc.campaign_id = c.campaign_id
+         WHERE uc.user_id = (SELECT user_id FROM gescall_users WHERE username = $1 LIMIT 1)
+         AND c.active = true`,
+        [username]
+      );
+      const campaigns = campRows.map(r => r.campaign_id);
+      if (campaigns.length > 0) {
+        await redis.hSet(`gescall:agent:${username}`, {
+          campaign_ids: campaigns.join(','),
+          campaign_id: String(campaigns[0])
+        });
+      } else if (fallbackCampaignId) {
+        const fid = String(fallbackCampaignId);
+        await redis.hSet(`gescall:agent:${username}`, {
+          campaign_ids: fid,
+          campaign_id: fid
+        });
+      }
+    } catch (e) {
+      if (fallbackCampaignId) {
+        const fid = String(fallbackCampaignId);
+        try {
+          await redis.hSet(`gescall:agent:${username}`, { campaign_ids: fid, campaign_id: fid });
+        } catch (_) {}
+      }
+    }
+  }
   
   setInterval(async () => {
     tickCounter++;

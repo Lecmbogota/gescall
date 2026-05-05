@@ -61,6 +61,11 @@ interface Campaign {
   trunk_id?: string | null;
   moh_class?: string | null;
   moh_custom_file?: string | null;
+  dialSchedule?: {
+    enabled?: boolean;
+    timezone?: string;
+    windows?: { days?: number[]; start?: string; end?: string }[];
+  };
 }
 
 interface CampaignsProps {
@@ -189,6 +194,7 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
                 trunk_id: camp.trunk_id || null,
                 moh_class: camp.moh_class || null,
                 moh_custom_file: camp.moh_custom_file || null,
+                dialSchedule: camp.dial_schedule || undefined,
               };
             } catch (err) {
               console.error(`[Campaigns] Error fetching progress for ${camp.campaign_id}:`, err);

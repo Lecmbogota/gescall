@@ -1,8 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import api from "@/services/api";
 import { io } from "socket.io-client";
-import JSZip from "jszip";
-import * as XLSX from "xlsx";
 import { AreaChart, Area, Tooltip as RechartsTooltip, ResponsiveContainer, YAxis } from "recharts";
 import {
     Tabs,
@@ -115,6 +113,7 @@ import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import { CampaignCallerIdSettings } from './CampaignCallerIdSettings';
 import CampaignTypifications from './CampaignTypifications';
+import CampaignDispositions from './CampaignDispositions';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getDetailDisplayStatus, translateLeadStatus } from "@/utils/callStatusUtils";
@@ -259,6 +258,81 @@ const getHexColor = (origColor: string) => {
     }
 };
 
+type DialScheduleWindowUI = { id: string; days: number[]; start: string; end: string };
+
+const DIAL_SCHED_TZ_PRESETS = [
+    'America/Mexico_City',
+    'America/Bogota',
+    'America/Lima',
+    'America/Santiago',
+    'America/Argentina/Buenos_Aires',
+    'America/Caracas',
+    'America/New_York',
+    'America/Los_Angeles',
+    'Europe/Madrid',
+    'UTC',
+];
+
+const DIAL_DAY_LABELS: { v: number; l: string }[] = [
+    { v: 1, l: 'Lun' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mié' }, { v: 4, l: 'Jue' },
+    { v: 5, l: 'Vie' }, { v: 6, l: 'Sáb' }, { v: 0, l: 'Dom' },
+];
+
+function newDialWindowId() {
+    return `w${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function padHHMM(t: string, fallback: string) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
+    if (!m) return fallback;
+    const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+    const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+function dialScheduleFromCampaign(c: Campaign): { enabled: boolean; timezone: string; windows: DialScheduleWindowUI[] } {
+    const ds = c.dialSchedule;
+    if (!ds || typeof ds !== 'object') {
+        return {
+            enabled: false,
+            timezone: 'America/Mexico_City',
+            windows: [{ id: newDialWindowId(), days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }],
+        };
+    }
+    const windows =
+        Array.isArray(ds.windows) && ds.windows.length > 0
+            ? ds.windows.map((w, i) => ({
+                  id: `w${i}-${(w.start as string) || 'x'}-${(w.end as string) || 'y'}`,
+                  days: Array.isArray(w.days)
+                      ? w.days.filter((d) => typeof d === 'number' && d >= 0 && d <= 6)
+                      : [1, 2, 3, 4, 5],
+                  start: padHHMM(typeof w.start === 'string' ? w.start : '', '09:00'),
+                  end: padHHMM(typeof w.end === 'string' ? w.end : '', '18:00'),
+              }))
+            : [{ id: newDialWindowId(), days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }];
+    return {
+        enabled: !!ds.enabled,
+        timezone: typeof ds.timezone === 'string' && ds.timezone.trim() ? ds.timezone.trim() : 'America/Mexico_City',
+        windows,
+    };
+}
+
+function serializeDialSchedulePayload(parts: {
+    enabled: boolean;
+    timezone: string;
+    windows: DialScheduleWindowUI[];
+}) {
+    return JSON.stringify({
+        enabled: parts.enabled,
+        timezone: parts.timezone,
+        windows: parts.windows.map(({ days, start, end }) => ({
+            days: [...days].sort((a, b) => a - b),
+            start: padHHMM(start, '09:00'),
+            end: padHHMM(end, '18:00'),
+        })),
+    });
+}
+
 interface Campaign {
     id: string;
     name: string;
@@ -280,6 +354,11 @@ interface Campaign {
     predictive_target_drop_rate?: number;
     predictive_min_factor?: number;
     predictive_max_factor?: number;
+    dialSchedule?: {
+        enabled?: boolean;
+        timezone?: string;
+        windows?: { days?: number[]; start?: string; end?: string }[];
+    };
     recording_settings?: {
         enabled?: boolean;
         storage?: string;
@@ -333,6 +412,8 @@ interface DialLogRecord {
     tts_vars?: any; // Dynamic columns
     attempt_number?: number;
     called_count?: number;
+    hangup_cause?: string;
+    disposition?: string;
 }
 
 interface TableColumnConfig {
@@ -378,6 +459,12 @@ export function CampaignDetailPage({
     const [predTargetDropRate, setPredTargetDropRate] = useState<number>(campaign.predictive_target_drop_rate ?? 0.03);
     const [predMinFactor, setPredMinFactor] = useState<number>(campaign.predictive_min_factor ?? 1.0);
     const [predMaxFactor, setPredMaxFactor] = useState<number>(campaign.predictive_max_factor ?? 4.0);
+
+    const initialDial = dialScheduleFromCampaign(campaign);
+    const [dialSchedEnabled, setDialSchedEnabled] = useState(initialDial.enabled);
+    const [dialSchedTimezone, setDialSchedTimezone] = useState(initialDial.timezone);
+    const [dialSchedWindows, setDialSchedWindows] = useState<DialScheduleWindowUI[]>(initialDial.windows);
+    const [savingDialSchedule, setSavingDialSchedule] = useState(false);
 
     // Recording Settings state
     const recSettings = campaign.recording_settings || {};
@@ -444,12 +531,15 @@ export function CampaignDetailPage({
             { id: 'sys_fecha', label: 'Fecha', visible: true, isSystem: true },
             { id: 'sys_telefono', label: 'Teléfono', visible: true, isSystem: true },
             { id: 'sys_agente', label: 'Agente Asignado', visible: true, isSystem: true },
+            { id: 'sys_disposicion', label: 'Disposición', visible: true, isSystem: true },
             { id: 'sys_estado', label: 'Estado', visible: true, isSystem: true },
             { id: 'sys_duracion', label: 'Duración', visible: true, isSystem: true },
+            { id: 'sys_quien_colgo', label: 'Quién Colgó', visible: true, isSystem: true },
             { id: 'sys_grabacion', label: 'Grabación', visible: true, isSystem: true },
         ] : [
             { id: 'sys_hora', label: 'Hora', visible: true, isSystem: true },
             { id: 'sys_fecha', label: 'Fecha', visible: true, isSystem: true },
+            { id: 'sys_disposicion', label: 'Disposición', visible: true, isSystem: true },
             { id: 'sys_estado', label: 'Estado', visible: true, isSystem: true },
             { id: 'sys_duracion', label: 'Duración', visible: true, isSystem: true },
             { id: 'sys_intentos', label: 'Reintentos', visible: true, isSystem: true },
@@ -457,6 +547,7 @@ export function CampaignDetailPage({
             { id: 'sys_lista', label: 'Lista', visible: true, isSystem: true },
             { id: 'sys_desc', label: 'Descripción Lista', visible: true, isSystem: true },
             { id: 'sys_callerid', label: 'CallerID', visible: true, isSystem: true },
+            { id: 'sys_quien_colgo', label: 'Quién Colgó', visible: true, isSystem: true },
         ];
         
         const dynConfigs: TableColumnConfig[] = campaign.campaign_type === 'INBOUND' ? [] : (campaign.leadStructureSchema || [
@@ -556,7 +647,11 @@ export function CampaignDetailPage({
         if (campaign.predictive_max_factor !== undefined) {
             setPredMaxFactor(campaign.predictive_max_factor);
         }
-    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor]);
+        const nextDial = dialScheduleFromCampaign(campaign);
+        setDialSchedEnabled(nextDial.enabled);
+        setDialSchedTimezone(nextDial.timezone);
+        setDialSchedWindows(nextDial.windows);
+    }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.ttsTemplates, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.dialSchedule]);
 
     useEffect(() => {
         const fetchCps = async () => {
@@ -611,6 +706,44 @@ export function CampaignDetailPage({
         
         return false;
     }, [dialLevel, maxRetries, retryGroups, selectedTrunkId, predTargetDropRate, predMinFactor, predMaxFactor, campaign.autoDialLevel, campaign.maxRetries, campaign.retrySettings, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, campaign.campaign_type]);
+
+    const dialScheduleDirty = useMemo(() => {
+        const current = serializeDialSchedulePayload({
+            enabled: dialSchedEnabled,
+            timezone: dialSchedTimezone,
+            windows: dialSchedWindows,
+        });
+        const saved = serializeDialSchedulePayload(dialScheduleFromCampaign(campaign));
+        return current !== saved;
+    }, [dialSchedEnabled, dialSchedTimezone, dialSchedWindows, campaign.dialSchedule, campaign.id]);
+
+    const handleSaveDialSchedule = async () => {
+        if (dialSchedEnabled) {
+            const bad = dialSchedWindows.some((w) => !w.days || w.days.length === 0);
+            if (bad) {
+                toast.error('Cada ventana debe incluir al menos un día de la semana.');
+                return;
+            }
+        }
+        setSavingDialSchedule(true);
+        try {
+            await api.updateCampaignDialSchedule(campaign.id, {
+                enabled: dialSchedEnabled,
+                timezone: dialSchedTimezone,
+                windows: dialSchedWindows.map(({ days, start, end }) => ({
+                    days,
+                    start: padHHMM(start, '09:00'),
+                    end: padHHMM(end, '18:00'),
+                })),
+            });
+            toast.success('Horario de discado guardado');
+            if (onUpdateCampaign) onUpdateCampaign();
+        } catch (error: any) {
+            toast.error(error.message || 'Error al guardar horario');
+        } finally {
+            setSavingDialSchedule(false);
+        }
+    };
 
     const handleSaveGeneralSettings = async () => {
         setSavingGeneral(true);
@@ -1152,8 +1285,9 @@ export function CampaignDetailPage({
     }, [campaign.id]);
 
     // Listen for real-time agent status updates via WebSocket
+    // Active for all campaign types that have the Monitor tab
     useEffect(() => {
-        if (campaign.campaign_type !== 'INBOUND') return;
+        if (campaign.campaign_type === 'BLASTER') return;
         
         // Connect to the base URL
         const backendUrl = import.meta.env.VITE_API_URL 
@@ -1188,10 +1322,9 @@ export function CampaignDetailPage({
     // Calculate agent duration in real-time
     const [now, setNow] = useState(Date.now());
     useEffect(() => {
-        if (campaign.campaign_type !== 'INBOUND') return;
         const interval = setInterval(() => setNow(Date.now()), 1000);
         return () => clearInterval(interval);
-    }, [campaign.campaign_type]);
+    }, []);
 
     // Timer calculation loop
     useEffect(() => {
@@ -1459,130 +1592,81 @@ export function CampaignDetailPage({
 
     const handleDownloadReport = async () => {
         const activeCols = tableColumns.filter(c => c.visible);
-        const headers = activeCols.map(c => c.label);
-        headers.push("Campaign ID");
+        const columnIds = activeCols.map(c => c.id);
 
-        const rows = filteredRecords.map((record) => {
-            const rowValues = activeCols.map(col => {
-                if (col.id === 'sys_hora') return formatToGlobalTimezone(record.call_date, timezone, 'HH:mm:ss');
-                if (col.id === 'sys_fecha') return formatToGlobalTimezone(record.call_date, timezone, 'yyyy-MM-dd');
-                if (col.id === 'sys_estado') return getDisplayStatus(record).label;
-                if (col.id === 'sys_duracion') return record.call_duration || record.length_in_sec || 0;
-                if (col.id === 'sys_dtmf') return record.dtmf_pressed || record.dtmf_response || "";
-                if (col.id === 'sys_lista') return record.list_name || "";
-                if (col.id === 'sys_desc') return record.list_description || "";
-                if (col.id === 'sys_callerid') return record.caller_id || record.caller_code || record.outbound_cid || "";
-                if (col.id === 'sys_grabacion' || col.id === 'sys_telefono') return record.phone_number || "";
-                if (col.id === 'sys_agente') return record.agent || record.agent_username || record.user || "";
+        const startDate = formatForBackendAPI(dateRange[0].startDate, timezone);
+        const endDate = formatForBackendAPI(dateRange[0].endDate, timezone);
 
-                const colName = col.id.replace('dyn_', '').replace('form_', '');
-                if (col.id.startsWith('dyn_')) {
-                    if (colName === "telefono") return record.phone_number || "";
-                    if (record.tts_vars && record.tts_vars[colName]) return record.tts_vars[colName];
-                } else if (col.id.startsWith('form_')) {
-                    if (record.typification_data) {
-                        try {
-                            const parsed = typeof record.typification_data === 'string' ? JSON.parse(record.typification_data) : record.typification_data;
-                            if (parsed && parsed[colName] !== undefined) return parsed[colName];
-                        } catch(e) {}
+        setDownloadProgress({ current: 0, total: 1 });
+        setLoading(true);
+
+        try {
+            const apiUrl = (() => {
+                try {
+                    const settings = localStorage.getItem('systemSettings');
+                    if (settings) {
+                        const parsed = JSON.parse(settings);
+                        if (parsed?.state?.apiUrl) return parsed.state.apiUrl;
                     }
-                }
-                return "";
+                } catch {}
+                return import.meta.env.VITE_API_URL || '/api';
+            })();
+
+            const token = (() => {
+                try {
+                    const authStr = localStorage.getItem('auth-storage');
+                    if (authStr) return JSON.parse(authStr)?.state?.session?.token;
+                } catch {}
+                return null;
+            })();
+
+            const resp = await fetch(`${apiUrl}/campaigns/${campaign.id}/export-report`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify({
+                    startDatetime: startDate,
+                    endDatetime: endDate,
+                    includeRecordings,
+                    timezone,
+                    visibleColumns: columnIds,
+                }),
             });
 
-            return [
-                ...rowValues,
-                record.campaign_id,
-            ];
-        });
-
-        // Build Excel using XLSX
-        const sheetData = [headers, ...rows];
-        const ws = XLSX.utils.aoa_to_sheet(sheetData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Reporte");
-        const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-
-        const baseFilename = `reporte_${campaign.name.replace(/\s+/g, "_")}_${formatForBackendAPI(dateRange[0].startDate, timezone)}_${formatForBackendAPI(dateRange[0].endDate, timezone)}`;
-
-        // Get auth token for recording downloads
-        const token = (() => {
-            try {
-                const authStr = localStorage.getItem('auth-storage');
-                if (authStr) return JSON.parse(authStr)?.state?.session?.token;
-            } catch {}
-            return null;
-        })();
-
-        // Identify records with recordings
-        const recordsWithRecordings = filteredRecords.filter(r => {
-            const uid = r.uniqueid || r.log_id || r.recording_id;
-            return uid && parseInt(r.call_duration || r.length_in_sec || '0') > 0;
-        });
-
-        if (includeRecordings && recordsWithRecordings.length > 0) {
-            // Build ZIP with Excel + recordings
-            const zip = new JSZip();
-            zip.file(`${baseFilename}.xlsx`, excelBuffer);
-            const recordingsFolder = zip.folder("grabaciones");
-
-            setDownloadProgress({ current: 0, total: recordsWithRecordings.length });
-            let downloadedCount = 0;
-            const failedRecordings: string[] = [];
-
-            for (const record of recordsWithRecordings) {
-                const uid = record.uniqueid || record.log_id || record.recording_id;
-                try {
-                    const resp = await fetch(`/api/audio/recordings/${uid}.wav`, {
-                        headers: token ? { Authorization: `Bearer ${token}` } : {},
-                    });
-                    if (resp.ok && resp.status !== 404) {
-                        const blob = await resp.blob();
-                        if (blob.size > 100) {
-                            recordingsFolder?.file(`${uid}.wav`, blob);
-                            downloadedCount++;
-                        } else {
-                            failedRecordings.push(`${uid} (empty)`);
-                        }
-                    } else {
-                        failedRecordings.push(`${uid} (HTTP ${resp.status})`);
-                    }
-                } catch {
-                    failedRecordings.push(`${uid} (error)`);
-                }
-                setDownloadProgress({ current: downloadedCount, total: recordsWithRecordings.length });
+            if (!resp.ok) {
+                const errData = await resp.json().catch(() => ({}));
+                throw new Error(errData.error || `Error ${resp.status}`);
             }
 
-            const zipBlob = await zip.generateAsync({ type: "blob" });
-            const url = window.URL.createObjectURL(zipBlob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `${baseFilename}.zip`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            setDownloadProgress(null);
-
-            const msg = `ZIP descargado: ${filteredRecords.length} registros, ${downloadedCount} grabaciones`;
-            if (failedRecordings.length > 0) {
-                toast.warning(`${msg} (${failedRecordings.length} no disponibles)`);
+            const contentDisposition = resp.headers.get('Content-Disposition');
+            let filename = 'reporte.xlsx';
+            if (contentDisposition) {
+                const match = contentDisposition.match(/filename="?([^"]+)"?/);
+                if (match) filename = match[1];
+            } else if (includeRecordings) {
+                filename = `reporte_${campaign.name.replace(/\s+/g, '_')}_${startDate.slice(0, 10)}.zip`;
             } else {
-                toast.success(msg);
+                filename = `reporte_${campaign.name.replace(/\s+/g, '_')}_${startDate.slice(0, 10)}.xlsx`;
             }
-        } else {
-            // Download Excel only
-            const blob = new Blob([excelBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+            const blob = await resp.blob();
             const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
+            const a = document.createElement('a');
             a.href = url;
-            a.download = `${baseFilename}.xlsx`;
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
 
-            toast.success(`Reporte descargado: ${filteredRecords.length} registros`);
+            toast.success(`Reporte descargado del servidor: ${filename}`);
+        } catch (error: any) {
+            toast.error(error.message || 'Error al generar el reporte');
+        } finally {
+            setLoading(false);
+            setDownloadProgress(null);
         }
     };
 
@@ -2013,7 +2097,7 @@ export function CampaignDetailPage({
                                         <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                                     )}
                                     {downloadProgress 
-                                        ? `Descargando ${downloadProgress.current}/${downloadProgress.total}` 
+                                        ? "Generando..." 
                                         : includeRecordings ? "Exportar ZIP" : "Exportar"
                                     }
                                 </Button>
@@ -2118,8 +2202,37 @@ export function CampaignDetailPage({
                                                                 </Tooltip>
                                                             </TableCell>
                                                         );
+                                                        if (col.id === 'sys_disposicion') {
+                                                            return <TableCell key={col.id} className="text-sm text-slate-700">{record.disposition || 'Desconocido'}</TableCell>;
+                                                        }
+                                                        if (col.id === 'sys_quien_colgo') {
+                                                            const cause = record.hangup_cause;
+                                                            let quien = 'Desconocido';
+                                                            if (cause) {
+                                                                const c = String(cause).trim();
+                                                                const map: Record<string, string> = {
+                                                                    '0': 'Desconocido', '1': 'Número no asignado', '3': 'Sin ruta al destino',
+                                                                    '16': 'Desconexión normal', '17': 'Destino ocupado', '18': 'No responde',
+                                                                    '19': 'Sin respuesta', '20': 'Abonado ausente', '21': 'Llamada rechazada por destino',
+                                                                    '22': 'Número cambiado', '27': 'Destino fuera de servicio',
+                                                                    '28': 'Formato de número inválido', '31': 'Desconexión normal (sin especificar)',
+                                                                    '34': 'Circuito ocupado', '38': 'Red fuera de servicio',
+                                                                    '41': 'Error temporal', '42': 'Congestión en red',
+                                                                    '43': 'Información de acceso rechazada', '47': 'Recursos no disponibles',
+                                                                    '50': 'No suscrito', '55': 'Llamada en progreso',
+                                                                    '57': 'Red no autorizada', '58': 'No autorizado',
+                                                                    '65': 'Portabilidad no soportada', '69': 'No implementado',
+                                                                    '79': 'Servicio no implementado', '88': 'Formato incompatible',
+                                                                    '95': 'Mensaje no válido', '102': 'Timeout / Expiró temporizador',
+                                                                    '111': 'Error de interconexión', '127': 'Error de interoperabilidad',
+                                                                };
+                                                                quien = map[c] || `Causa de colgado: ${c}`;
+                                                            }
+                                                            return <TableCell key={col.id} className="text-sm text-slate-600">{quien}</TableCell>;
+                                                        }
                                                         if (col.id === 'sys_grabacion') {
-                                                            const duration = parseInt(record.length_in_sec || record.call_duration || '0');
+                                                            const duration = parseInt(String(record.length_in_sec || record.call_duration || '0'));
+
                                                             if (duration > 0 || ['ANSWER', 'COMPLET', 'SALE'].includes(record.call_status || '')) {
                                                                 return (
                                                                     <TableCell key={col.id}>
@@ -2466,6 +2579,216 @@ export function CampaignDetailPage({
                         <div className="w-full">
                             <CampaignTypifications campaignId={campaign.id} />
                         </div>
+
+                        {/* Disposiciones */}
+                        <div className="w-full">
+                            <CampaignDispositions campaignId={campaign.id} />
+                        </div>
+
+                        {campaign.campaign_type !== 'INBOUND' && (
+                            <Card className="shadow-sm border border-amber-200/50 bg-gradient-to-br from-amber-50/40 to-white/70 backdrop-blur-md rounded-2xl overflow-hidden">
+                                <CardHeader className="py-4 border-b border-amber-100/60 bg-white/50">
+                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-amber-100 rounded-lg text-amber-700">
+                                                <Clock className="w-5 h-5" />
+                                            </div>
+                                            <div>
+                                                <CardTitle className="text-base">Horario de discado</CardTitle>
+                                                <CardDescription className="text-xs">
+                                                    Fuera de estas ventanas el marcador no originará llamadas para esta campaña (los leads permanecen en el hopper).
+                                                </CardDescription>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-3 shrink-0">
+                                            <Label htmlFor="dialSchedEn" className="text-xs text-slate-600 whitespace-nowrap">
+                                                Restringir por horario
+                                            </Label>
+                                            <Switch
+                                                id="dialSchedEn"
+                                                checked={dialSchedEnabled}
+                                                onCheckedChange={setDialSchedEnabled}
+                                                className="data-[state=checked]:bg-amber-600"
+                                            />
+                                        </div>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="p-5 space-y-5">
+                                    {dialSchedEnabled && (
+                                        <>
+                                            <div className="space-y-2">
+                                                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                    Zona horaria (IANA)
+                                                </Label>
+                                                <div className="flex flex-col sm:flex-row gap-2">
+                                                    <Select value={dialSchedTimezone} onValueChange={setDialSchedTimezone}>
+                                                        <SelectTrigger className="font-mono text-sm h-10 bg-white sm:max-w-xs">
+                                                            <SelectValue placeholder="Zona" />
+                                                        </SelectTrigger>
+                                                        <SelectContent className="rounded-xl max-h-64">
+                                                            {DIAL_SCHED_TZ_PRESETS.map((tz) => (
+                                                                <SelectItem key={tz} value={tz} className="font-mono text-xs">
+                                                                    {tz}
+                                                                </SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                    <Input
+                                                        className="font-mono text-sm h-10 bg-white flex-1"
+                                                        value={dialSchedTimezone}
+                                                        onChange={(e) => setDialSchedTimezone(e.target.value.trim())}
+                                                        placeholder="p. ej. America/Mexico_City"
+                                                    />
+                                                </div>
+                                                <p className="text-[10px] text-slate-400">
+                                                    Debe coincidir con la base de datos IANA del servidor (Go). Si la zona no existe, el marcador usará UTC.
+                                                </p>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between">
+                                                    <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                        Ventanas permitidas
+                                                    </Label>
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="h-8 gap-1 rounded-lg"
+                                                        onClick={() =>
+                                                            setDialSchedWindows((prev) => [
+                                                                ...prev,
+                                                                {
+                                                                    id: newDialWindowId(),
+                                                                    days: [1, 2, 3, 4, 5],
+                                                                    start: '09:00',
+                                                                    end: '18:00',
+                                                                },
+                                                            ])
+                                                        }
+                                                    >
+                                                        <Plus className="w-3.5 h-3.5" />
+                                                        Añadir ventana
+                                                    </Button>
+                                                </div>
+
+                                                {dialSchedWindows.map((win) => (
+                                                    <div
+                                                        key={win.id}
+                                                        className="rounded-xl border border-slate-200/80 bg-white/80 p-4 space-y-3 shadow-sm"
+                                                    >
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {DIAL_DAY_LABELS.map(({ v, l }) => {
+                                                                const on = win.days.includes(v);
+                                                                return (
+                                                                    <button
+                                                                        key={v}
+                                                                        type="button"
+                                                                        onClick={() =>
+                                                                            setDialSchedWindows((prev) =>
+                                                                                prev.map((w) =>
+                                                                                    w.id !== win.id
+                                                                                        ? w
+                                                                                        : {
+                                                                                              ...w,
+                                                                                              days: on
+                                                                                                  ? w.days.filter((d) => d !== v)
+                                                                                                  : [...w.days, v].sort(
+                                                                                                        (a, b) =>
+                                                                                                            (a === 0 ? 7 : a) -
+                                                                                                            (b === 0 ? 7 : b)
+                                                                                                    ),
+                                                                                          }
+                                                                                )
+                                                                            )
+                                                                        }
+                                                                        className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors ${
+                                                                            on
+                                                                                ? 'bg-amber-500 text-white border-amber-600'
+                                                                                : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+                                                                        }`}
+                                                                    >
+                                                                        {l}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-end">
+                                                            <div>
+                                                                <Label className="text-[10px] text-slate-500 uppercase">Inicio</Label>
+                                                                <Input
+                                                                    type="time"
+                                                                    className="h-9 mt-1 font-mono text-sm"
+                                                                    value={padHHMM(win.start, '09:00')}
+                                                                    onChange={(e) =>
+                                                                        setDialSchedWindows((prev) =>
+                                                                            prev.map((w) =>
+                                                                                w.id === win.id ? { ...w, start: e.target.value } : w
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <Label className="text-[10px] text-slate-500 uppercase">Fin</Label>
+                                                                <Input
+                                                                    type="time"
+                                                                    className="h-9 mt-1 font-mono text-sm"
+                                                                    value={padHHMM(win.end, '18:00')}
+                                                                    onChange={(e) =>
+                                                                        setDialSchedWindows((prev) =>
+                                                                            prev.map((w) =>
+                                                                                w.id === win.id ? { ...w, end: e.target.value } : w
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                />
+                                                            </div>
+                                                            <div className="sm:col-span-1 col-span-2 flex justify-end">
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                                    disabled={dialSchedWindows.length <= 1}
+                                                                    onClick={() =>
+                                                                        setDialSchedWindows((prev) =>
+                                                                            prev.length <= 1 ? prev : prev.filter((w) => w.id !== win.id)
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Trash2 className="w-4 h-4 mr-1" />
+                                                                    Quitar
+                                                                </Button>
+                                                            </div>
+                                                        </div>
+                                                        <p className="text-[10px] text-slate-400">
+                                                            Si la hora de fin es menor que la de inicio en el mismo día, se interpreta como ventana nocturna (cruza medianoche).
+                                                        </p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </>
+                                    )}
+
+                                    <div className="flex justify-end pt-1">
+                                        <Button
+                                            type="button"
+                                            onClick={handleSaveDialSchedule}
+                                            disabled={savingDialSchedule || !dialScheduleDirty}
+                                            className="gap-2 rounded-xl min-w-[180px]"
+                                        >
+                                            {savingDialSchedule ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Save className="w-4 h-4" />
+                                            )}
+                                            {savingDialSchedule ? 'Guardando…' : 'Guardar horario'}
+                                        </Button>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
                         
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                             
@@ -3422,6 +3745,42 @@ export function CampaignDetailPage({
                                         <span>{totalActiveLeads.toLocaleString()} TOTAL</span>
                                     </div>
                                 </div>
+
+                                {campaign.campaign_type === 'OUTBOUND_PREDICTIVE' && (() => {
+                                    const readyAgents = allAgents.filter(a => campaignAgents.includes(a.username) && (a as any).state === 'READY').length;
+                                    const predTarget = campaign.predictive_target_drop_rate ?? 0.03;
+                                    const predMin = campaign.predictive_min_factor ?? 1.0;
+                                    const predMax = campaign.predictive_max_factor ?? 4.0;
+                                    return (
+                                    <div className="bg-gradient-to-r from-blue-50/60 to-indigo-50/40 border border-blue-200/60 rounded-xl p-4 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-[11px] font-bold text-blue-600 uppercase tracking-widest flex items-center gap-1.5">
+                                                <Activity className="w-3.5 h-3.5 text-blue-500" /> Modo Predictivo
+                                            </span>
+                                            <Badge className="bg-blue-100 text-blue-700 text-[10px] font-semibold border-blue-200">
+                                                Auto-Ajustable
+                                            </Badge>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            <div className="bg-white/80 rounded-lg p-2 text-center border border-blue-100">
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Agentes Ready</span>
+                                                <span className="text-lg font-black text-blue-700">{readyAgents}</span>
+                                            </div>
+                                            <div className="bg-white/80 rounded-lg p-2 text-center border border-blue-100">
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Factor</span>
+                                                <span className="text-lg font-black text-indigo-600">{predMin}–{predMax}</span>
+                                            </div>
+                                            <div className="bg-white/80 rounded-lg p-2 text-center border border-blue-100">
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Tasa Máx</span>
+                                                <span className="text-lg font-black text-amber-600">{(predTarget * 100).toFixed(1)}%</span>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white/60 rounded-lg p-2 text-[10px] text-slate-500 leading-relaxed border border-blue-100">
+                                            El marcador ajusta automáticamente el ritmo para mantener la tasa de abandono por debajo del {(predTarget * 100).toFixed(1)}%, disparando entre {predMin}× y {predMax}× llamadas por cada agente Ready.
+                                        </div>
+                                    </div>
+                                    );
+                                })()}
 
                                 {/* Progreso Reintentos */}
                                 <div>

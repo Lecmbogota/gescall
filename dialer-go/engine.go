@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +24,8 @@ type Campaign struct {
 	AutoDialLevel   float64
 	AltPhoneEnabled bool
 	CampaignType    string
+	// dial_schedule JSONB: si enabled y fuera de ventanas, no se disca
+	DialScheduleJSON []byte
 	// Per-campaign trunk overrides (from gescall_trunks via trunk_id)
 	TrunkEndpoint string // trunk_id used as PJSIP endpoint name
 	TrunkHost     string
@@ -87,9 +92,7 @@ func NewDialerEngine() *DialerEngine {
 		port = "5060"
 	}
 	prefix := os.Getenv("SBC_PREFIX")
-	if prefix == "" {
-		prefix = "1122"
-	}
+	// Default is empty — per-trunk dial_prefix should be configured in DB when needed.
 
 	log.Printf("[RedisDialer] Initialized. Interval: %dms, Max Concurrent: %d, Max CPS: %d\n", intervalMs, maxConcurrent, maxCps)
 
@@ -234,12 +237,22 @@ func (d *DialerEngine) tick() {
 		return
 	}
 
+	// Predictive/progressive need agent-aware pacing; process them before BLASTER so
+	// global CPS budget is not exhausted every tick by high-rate campaigns (starvation).
+	sort.SliceStable(campaigns, func(i, j int) bool {
+		return dialPriority(campaigns[i].CampaignType) < dialPriority(campaigns[j].CampaignType)
+	})
+
 	totalLaunchedThisTick := 0
 
 	for _, camp := range campaigns {
-		// Ensure we don't exceed global Max CPS
+		// Remaining CPS budget for this tick — skip heavy work when already exhausted.
 		if totalLaunchedThisTick >= d.maxCps {
-			break
+			continue
+		}
+
+		if !campaignDialScheduleAllowed(camp.DialScheduleJSON, time.Now()) {
+			continue
 		}
 
 		// Re-check circuit breaker mid-tick
@@ -272,9 +285,17 @@ func (d *DialerEngine) tick() {
 			agentKeys, err := Redis.Keys(ctx, "gescall:agent:*").Result()
 			readyCount := 0
 			if err == nil {
+				campID := strings.TrimSpace(camp.CampaignID)
 				for _, ak := range agentKeys {
 					stateMap, _ := Redis.HGetAll(ctx, ak).Result()
-					if stateMap["state"] == "READY" && stateMap["campaign_id"] == camp.CampaignID {
+					if strings.TrimSpace(stateMap["state"]) != "READY" {
+						continue
+					}
+					campaignIDs := strings.TrimSpace(stateMap["campaign_ids"])
+					if campaignIDs == "" {
+						campaignIDs = strings.TrimSpace(stateMap["campaign_id"])
+					}
+					if campID != "" && strings.Contains(","+campaignIDs+",", ","+campID+",") {
 						readyCount++
 					}
 				}
@@ -284,7 +305,14 @@ func (d *DialerEngine) tick() {
 				if camp.CampaignType == "OUTBOUND_PREDICTIVE" {
 					config := d.getCampaignPredictiveConfig(camp)
 					factor := d.predictive.GetFactor(camp.CampaignID, config)
-					targetConcurrent := int(float64(readyCount) * factor)
+					if factor <= 0 {
+						factor = 1.0
+					}
+					// Ceil evita int(0) cuando factor*readyCount < 1 (p. ej. factor bajo por config).
+					targetConcurrent := int(math.Ceil(float64(readyCount) * factor))
+					if targetConcurrent < 1 {
+						targetConcurrent = 1
+					}
 					neededCalls := targetConcurrent - activeCount
 					if neededCalls > 0 {
 						maxToPopThisCamp = neededCalls
@@ -294,7 +322,10 @@ func (d *DialerEngine) tick() {
 					if multiplier <= 0 {
 						multiplier = 1.0
 					}
-					targetConcurrent := int(float64(readyCount) * multiplier)
+					targetConcurrent := int(math.Ceil(float64(readyCount) * multiplier))
+					if targetConcurrent < 1 {
+						targetConcurrent = 1
+					}
 					neededCalls := targetConcurrent - activeCount
 					if neededCalls > 0 {
 						maxToPopThisCamp = neededCalls
@@ -442,21 +473,74 @@ func (d *DialerEngine) getActiveCampaigns() ([]Campaign, error) {
 			log.Printf("[RedisDialer] Error scanning campaign: %v", err)
 		}
 	}
+	attachDialSchedules(campaigns)
 	return campaigns, nil
 }
 
+// getActiveCount cuenta llamadas que aún ocupan “capacidad” para pacing predictivo.
+// Node puede escribir ari_handled=YES / final_status en Redis antes de borrar la clave
+// (logCallResult vs ChannelDestroyed); esas claves no deben bloquear nuevos intentos.
 func (d *DialerEngine) getActiveCount(campaignID string) (int, error) {
 	keys, err := Redis.Keys(ctx, fmt.Sprintf("gescall:call:%s:*", campaignID)).Result()
 	if err != nil {
 		return 0, err
 	}
-	return len(keys), nil
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	pipe := Redis.Pipeline()
+	ariCmds := make([]*redis.StringCmd, len(keys))
+	fsCmds := make([]*redis.StringCmd, len(keys))
+	for i, k := range keys {
+		ariCmds[i] = pipe.HGet(ctx, k, "ari_handled")
+		fsCmds[i] = pipe.HGet(ctx, k, "final_status")
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return len(keys), err
+	}
+	n := 0
+	for i := range keys {
+		ah, _ := ariCmds[i].Result()
+		if ah == "YES" {
+			continue
+		}
+		fs, _ := fsCmds[i].Result()
+		if strings.TrimSpace(fs) != "" {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// dialPriority: lower = earlier in each tick so predictive/progressive are not starved
+// when BLASTER campaigns consume the full global CPS budget first.
+func dialPriority(campaignType string) int {
+	switch campaignType {
+	case "OUTBOUND_PREDICTIVE":
+		return 0
+	case "OUTBOUND_PROGRESSIVE":
+		return 1
+	case "BLASTER", "":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// requeueHopperLead restores a popped entry after LPop when we cannot claim or parse it.
+func requeueHopperLead(campaignID, leadJSON string) {
+	key := fmt.Sprintf("gescall:hopper:%s", campaignID)
+	if err := Redis.RPush(ctx, key, leadJSON).Err(); err != nil {
+		log.Printf("[RedisDialer] requeue hopper %s failed: %v", key, err)
+	}
 }
 
 func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 	var lead map[string]interface{}
 	if err := json.Unmarshal([]byte(leadJSON), &lead); err != nil {
-		log.Printf("[RedisDialer] Parse error: %v", err)
+		log.Printf("[RedisDialer] Parse error: %v — requeueing hopper entry", err)
+		requeueHopperLead(camp.CampaignID, leadJSON)
 		return
 	}
 
@@ -498,12 +582,23 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 		phoneIndex, leadID,
 	)
 	if err != nil {
-		log.Printf("[RedisDialer] DB claim error lead=%s: %v", leadID, err)
+		log.Printf("[RedisDialer] DB claim error lead=%s: %v — requeueing hopper entry", leadID, err)
+		requeueHopperLead(camp.CampaignID, leadJSON)
 		return
 	}
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		// Already dialing/completed/DNC — skip
+		var st sql.NullString
+		if err := DB.QueryRow("SELECT status FROM gescall_leads WHERE lead_id = $1", leadID).Scan(&st); err != nil {
+			log.Printf("[RedisDialer] claim skip lead=%s: %v", leadID, err)
+			return
+		}
+		if !st.Valid || (st.String != "NEW" && st.String != "QUEUE") {
+			log.Printf("[RedisDialer] claim skip lead=%s: terminal status %s (dropped from hopper)", leadID, st.String)
+			return
+		}
+		log.Printf("[RedisDialer] DB claim race lead=%s; requeueing hopper entry", leadID)
+		requeueHopperLead(camp.CampaignID, leadJSON)
 		return
 	}
 

@@ -34,7 +34,7 @@ interface Campaign {
   lastActivity: string;
   hasCallerId?: boolean;
   hasBlacklist?: boolean;
-
+  campaign_type?: string;
   autoDialLevel?: string;
 }
 
@@ -191,6 +191,13 @@ export function CampaignCompactView({ campaigns, onSelectCampaign }: CampaignCom
                       ) : (
                         <>
                           <h3 className="text-slate-900 truncate">{campaign.name}</h3>
+                          {campaign.campaign_type && (
+                            <Badge className="bg-blue-50 text-blue-600 border-blue-200 text-[10px] font-medium flex-shrink-0">
+                              {campaign.campaign_type === 'INBOUND' ? 'INBOUND' :
+                               campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? 'PREDICTIVO' :
+                               campaign.campaign_type === 'OUTBOUND_PROGRESSIVE' ? 'PROGRESIVO' : 'BLASTER'}
+                            </Badge>
+                          )}
                           <Badge className={`${getStatusColor(campaign.status)} text-white flex-shrink-0`}>
                             {getStatusText(campaign.status)}
                           </Badge>

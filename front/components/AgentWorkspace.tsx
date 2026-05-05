@@ -69,6 +69,15 @@ export const AgentWorkspace: React.FC = () => {
     return raw.map((c: any) => typeof c === 'string' ? c : c.id).filter(Boolean);
   }, [session]);
   const agentUsername = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
+
+  const [agentCampaignType, setAgentCampaignType] = useState<string | null>(null);
+  React.useEffect(() => {
+    if (agentCampaigns.length > 0) {
+      api.getCampaignById(agentCampaigns[0]).then((res: any) => {
+        if (res?.data?.campaign_type) setAgentCampaignType(res.data.campaign_type);
+      }).catch(() => {});
+    }
+  }, [agentCampaigns[0]]);
   
   const defaultOrder = AVAILABLE_WIDGETS.map(w => w.id);
   const [widgetOrder, setWidgetOrder] = useState<string[]>(() => {
@@ -195,12 +204,18 @@ export const AgentWorkspace: React.FC = () => {
     usernameRef.current = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
   }, [session]);
 
+  const agentCampaignsRef = React.useRef<string[]>([]);
+  React.useEffect(() => {
+    agentCampaignsRef.current = agentCampaigns;
+  }, [agentCampaigns]);
+
   // Broadcast state on every change
   React.useEffect(() => {
     localStorage.setItem('gescall_agentState', agentState);
     const username = (session?.user as any)?.username || (session?.user as any)?.name || 'AG';
-    socketService.updateAgentState(username, detailedState);
-  }, [detailedState, agentState, session]);
+    const campaignId = agentCampaigns[0] || undefined;
+    socketService.updateAgentState(username, detailedState, campaignId);
+  }, [detailedState, agentState, session, agentCampaigns]);
 
   // Ensure socket is connected and re-emit current state on (re)connection.
   // This prevents Redis from staying as OFFLINE after a reload/network blip
@@ -208,7 +223,8 @@ export const AgentWorkspace: React.FC = () => {
   React.useEffect(() => {
     const sock = socketService.connect();
     const reEmit = () => {
-      socketService.updateAgentState(usernameRef.current, detailedStateRef.current);
+      const cid = agentCampaignsRef.current[0] || undefined;
+      socketService.updateAgentState(usernameRef.current, detailedStateRef.current, cid);
     };
     // On first connection
     if (sock?.connected) reEmit();
@@ -220,11 +236,49 @@ export const AgentWorkspace: React.FC = () => {
     };
   }, []);
 
+  // Listen for call assignments from the predictive/progressive dispatcher.
+  // When a call is bridged to this agent, auto-select the correct campaign for typification.
+  React.useEffect(() => {
+    const sock = socketService.connect();
+    const handler = (data: any) => {
+      if (data && data.username === usernameRef.current && data.campaign_id) {
+        console.log('[AgentWorkspace] agent:call:assigned received — campaign:', data.campaign_id);
+        setSelectedCampaignId(data.campaign_id);
+        localStorage.setItem('gescall_last_call_campaign', data.campaign_id);
+      }
+    };
+    sock?.on('agent:call:assigned', handler);
+    return () => {
+      sock?.off('agent:call:assigned', handler);
+    };
+  }, []);
+
+  // When typification modal opens, ensure campaign is set.
+  // Falls back to localStorage (set by agent:call:assigned) or agent's first campaign.
+  React.useEffect(() => {
+    if (isTipificarOpen && !selectedCampaignId) {
+      const stored = localStorage.getItem('gescall_last_call_campaign');
+      if (stored && agentCampaigns.includes(stored)) {
+        setSelectedCampaignId(stored);
+      } else if (agentCampaigns.length > 0) {
+        setSelectedCampaignId(agentCampaigns[0]);
+      }
+    }
+  }, [isTipificarOpen]);
+
+  // Load typifications once modal is open and campaign is resolved
+  React.useEffect(() => {
+    if (isTipificarOpen && selectedCampaignId) {
+      loadTypifications();
+    }
+  }, [isTipificarOpen, selectedCampaignId]);
+
   // Heartbeat: re-broadcast state every 15s so Redis never expires/staling
   // and any stale OFFLINE caused by disconnect race conditions self-heals.
   React.useEffect(() => {
     const interval = setInterval(() => {
-      socketService.updateAgentState(usernameRef.current, detailedStateRef.current);
+      const cid = agentCampaignsRef.current[0] || undefined;
+      socketService.updateAgentState(usernameRef.current, detailedStateRef.current, cid);
     }, 15000);
     return () => clearInterval(interval);
   }, []);
@@ -241,7 +295,6 @@ export const AgentWorkspace: React.FC = () => {
   React.useEffect(() => {
     if (prevCallStatusRef.current === 'connected' && callStatus === 'idle') {
       setIsTipificarOpen(true);
-      loadTypifications();
     }
     prevCallStatusRef.current = callStatus;
   }, [callStatus]);
@@ -249,7 +302,7 @@ export const AgentWorkspace: React.FC = () => {
   const loadTypifications = async () => {
     const campId = selectedCampaignId || agentCampaigns[0];
     if (!campId) return;
-    setSelectedCampaignId(campId);
+    if (selectedCampaignId !== campId) setSelectedCampaignId(campId);
     setTypsLoading(true);
     try {
       const res = await api.getTypifications(campId);
@@ -639,8 +692,13 @@ export const AgentWorkspace: React.FC = () => {
               </div>
               {isLeftSidebarOpen && (
               <div className="flex flex-col">
-                <span className="text-sm font-bold text-slate-800 leading-tight">{(session?.user as any)?.username || (session?.user as any)?.name || 'Agente Demo'}</span>
-                <span className="text-[10px] text-slate-500 uppercase">Extensión 104</span>
+                <span className="text-sm font-bold text-slate-800 leading-tight">{agentUsername}</span>
+                <span className="text-[10px] text-slate-500 uppercase">Extensión {sipExtension || 'N/A'}</span>
+                {agentCampaignType && agentCampaignType !== 'BLASTER' && (
+                  <span className={`text-[9px] font-bold uppercase mt-0.5 ${agentCampaignType === 'OUTBOUND_PREDICTIVE' ? 'text-blue-600 bg-blue-50 border-blue-200' : agentCampaignType === 'OUTBOUND_PROGRESSIVE' ? 'text-purple-600 bg-purple-50 border-purple-200' : 'text-green-600 bg-green-50 border-green-200'} px-1.5 py-0.5 rounded-full border inline-block w-fit`}>
+                    {agentCampaignType === 'OUTBOUND_PREDICTIVE' ? 'Predictivo' : agentCampaignType === 'OUTBOUND_PROGRESSIVE' ? 'Progresivo' : agentCampaignType}
+                  </span>
+                )}
               </div>
               )}
             </div>
@@ -1297,22 +1355,7 @@ export const AgentWorkspace: React.FC = () => {
               </button>
             </div>
 
-            {/* Campaign selector */}
-            {agentCampaigns.length > 1 && (
-              <div className="shrink-0 mb-4">
-                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Campaña</label>
-                <select
-                  value={selectedCampaignId}
-                  onChange={e => { setSelectedCampaignId(e.target.value); setTyps([]); setSelectedTypification(''); setSelectedTypId(null); }}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none"
-                >
-                  <option value="">Seleccionar campaña</option>
-                  {agentCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-            )}
-
-            {/* Scrollable Body */}
+            {/* Body — no campaign selector; system already knows from dispatched call */}
             <div className="flex-1 overflow-y-auto pr-3 -mr-3 custom-scrollbar flex flex-col">
               {typsLoading ? (
                 <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Cargando tipificaciones...</div>

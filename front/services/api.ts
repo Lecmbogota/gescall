@@ -397,6 +397,10 @@ class ApiService {
     });
   }
 
+  async getCampaignById(campaignId: string) {
+    return this.request(`/campaigns?campaign_id=${campaignId}`);
+  }
+
   async updateCampaignAltPhone(campaignId: string, enabled: boolean) {
     return this.request(`/campaigns/${campaignId}/alt-phone`, {
       method: 'PUT',
@@ -408,6 +412,17 @@ class ApiService {
     return this.request(`/campaigns/${campaignId}/retry-settings`, {
       method: 'PUT',
       body: JSON.stringify({ retry_settings: retrySettings }),
+    });
+  }
+
+  async updateCampaignDialSchedule(campaignId: string, dialSchedule: {
+    enabled: boolean;
+    timezone: string;
+    windows: { days: number[]; start: string; end: string }[];
+  }) {
+    return this.request(`/campaigns/${campaignId}/dial-schedule`, {
+      method: 'PUT',
+      body: JSON.stringify({ dial_schedule: dialSchedule }),
     });
   }
 
@@ -1204,6 +1219,48 @@ class ApiService {
 
   async getCallLogTypification(logId: number) {
     return this.request(`/typifications/call-logs/${logId}/typification`);
+  }
+
+  // --- Dispositions (Disposiciones) ---
+  async getCampaignDispositions(campaignId: string) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions`);
+  }
+
+  async getDefaultDispositions(campaignId: string) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions/defaults`);
+  }
+
+  async createDisposition(campaignId: string, data: { code: string; label: string; color?: string; sort_order?: number; conditions?: any; active?: boolean }) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDisposition(campaignId: string, id: number, data: { code?: string; label?: string; color?: string; sort_order?: number; conditions?: any; active?: boolean }) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDisposition(campaignId: string, id: number) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async reorderDispositions(campaignId: string, ids: number[]) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async resetDispositionsToDefaults(campaignId: string) {
+    return this.request(`/dispositions/campaigns/${campaignId}/dispositions/reset-defaults`, {
+      method: 'POST',
+    });
   }
 
   // --- Settings ---

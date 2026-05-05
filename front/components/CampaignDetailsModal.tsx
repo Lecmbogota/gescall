@@ -90,6 +90,9 @@ interface Campaign {
   maxRetries?: number;
   campaign_type?: string;
   trunk_id?: string | null;
+  predictive_target_drop_rate?: number;
+  predictive_min_factor?: number;
+  predictive_max_factor?: number;
 }
 
 interface CampaignDetailsModalProps {
@@ -127,13 +130,21 @@ export function CampaignDetailsModal({
   const [selectedTrunkId, setSelectedTrunkId] = useState<string>(campaign.trunk_id || '__none__');
   const [availableTrunks, setAvailableTrunks] = useState<any[]>([]);
 
+  // Predictive state
+  const [predTargetDropRate, setPredTargetDropRate] = useState(campaign.predictive_target_drop_rate ?? 0.03);
+  const [predMinFactor, setPredMinFactor] = useState(campaign.predictive_min_factor ?? 1.0);
+  const [predMaxFactor, setPredMaxFactor] = useState(campaign.predictive_max_factor ?? 4.0);
+
   // Sync status when campaign prop changes or modal opens
   useEffect(() => {
     setCampaignStatus(campaign.status);
     setDialLevel(campaign.autoDialLevel || "1.0");
     setMaxRetries(campaign.maxRetries ?? 3);
     setSelectedTrunkId(campaign.trunk_id || '__none__');
-  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.trunk_id, isOpen]);
+    if (campaign.predictive_target_drop_rate !== undefined) setPredTargetDropRate(campaign.predictive_target_drop_rate);
+    if (campaign.predictive_min_factor !== undefined) setPredMinFactor(campaign.predictive_min_factor);
+    if (campaign.predictive_max_factor !== undefined) setPredMaxFactor(campaign.predictive_max_factor);
+  }, [campaign.status, campaign.id, campaign.autoDialLevel, campaign.maxRetries, campaign.trunk_id, campaign.predictive_target_drop_rate, campaign.predictive_min_factor, campaign.predictive_max_factor, isOpen]);
 
   // Fetch trunks list once
   useEffect(() => {
@@ -152,7 +163,14 @@ export function CampaignDetailsModal({
       await Promise.all([
         api.updateCampaignDialLevel(campaign.id, dialLevel),
         api.updateCampaignRetries(campaign.id, maxRetries),
-        api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId)
+        api.updateCampaignTrunk(campaign.id, selectedTrunkId === '__none__' ? null : selectedTrunkId),
+        ...(campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? [
+          api.updateCampaignPredictive(campaign.id, {
+            predictive_target_drop_rate: predTargetDropRate,
+            predictive_min_factor: predMinFactor,
+            predictive_max_factor: predMaxFactor,
+          })
+        ] : [])
       ]);
       toast.success("Configuración general guardada correctamente");
     } catch (error: any) {
@@ -1270,6 +1288,59 @@ export function CampaignDetailsModal({
                           </Select>
                         </div>
                       </div>
+
+                      {campaign.campaign_type === 'OUTBOUND_PREDICTIVE' && (
+                        <>
+                        <div className="border-t border-slate-100" />
+                        <div>
+                          <div className="flex items-center gap-2 mb-3">
+                            <Activity className="w-3.5 h-3.5 text-blue-500" />
+                            <span className="text-xs font-semibold text-slate-700">Predictivo Adaptativo</span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="space-y-1">
+                              <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Tasa Abandono</Label>
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  type="number"
+                                  min="0.01"
+                                  max="0.20"
+                                  step="0.01"
+                                  value={predTargetDropRate}
+                                  onChange={(e) => setPredTargetDropRate(parseFloat(e.target.value) || 0.03)}
+                                  className="font-mono text-xs h-7 w-16 text-center"
+                                />
+                                <span className="text-[10px] text-slate-400">{(predTargetDropRate * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Factor Mín</Label>
+                              <Input
+                                type="number"
+                                min="0.5"
+                                max="3.0"
+                                step="0.1"
+                                value={predMinFactor}
+                                onChange={(e) => setPredMinFactor(parseFloat(e.target.value) || 1.0)}
+                                className="font-mono text-xs h-7 w-16 text-center"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Factor Máx</Label>
+                              <Input
+                                type="number"
+                                min="1.5"
+                                max="10.0"
+                                step="0.1"
+                                value={predMaxFactor}
+                                onChange={(e) => setPredMaxFactor(parseFloat(e.target.value) || 4.0)}
+                                className="font-mono text-xs h-7 w-16 text-center"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        </>
+                      )}
 
                       <div className="border-t border-slate-100" />
 

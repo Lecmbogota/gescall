@@ -10,7 +10,6 @@ async function loadHopper() {
         `);
 
         if (campaigns.length === 0) return { success: true, count: 0, message: "No active campaigns." };
-        console.log("Active campaigns:", campaigns);
 
         let totalQueued = 0;
 
@@ -19,10 +18,24 @@ async function loadHopper() {
 
             // 2. Check current hopper size — skip if already has enough leads
             const hopperSize = await redis.lLen(hopperKey);
-            console.log(`Campaign ${camp.campaign_id} hopper size: ${hopperSize}`);
             if (hopperSize >= 6000) continue;
 
             const toLoad = 15000 - hopperSize; // Fill up to 15000
+
+            // Lead IDs already serialized in Redis (avoid duplicates when reloading orphan QUEUE)
+            const inHopper = new Set();
+            if (hopperSize > 0) {
+                const existingRaw = await redis.lRange(hopperKey, 0, -1);
+                for (const raw of existingRaw) {
+                    try {
+                        const o = JSON.parse(raw);
+                        if (o.lead_id != null && o.lead_id !== '') {
+                            inHopper.add(Number(o.lead_id));
+                        }
+                    } catch (_) { /* skip bad hopper line */ }
+                }
+            }
+            const excludeLeadIds = Array.from(inHopper);
 
             // 3. Load leads with DNC + smart rules pre-filtering in a single query
             const { rows } = await pg.query(`
@@ -36,9 +49,10 @@ async function loadHopper() {
                     SELECT led.lead_id, led.phone_number, led.first_name, led.last_name, led.vendor_lead_code, led.phone_index, led.tts_vars, ls.campaign_id, ls.list_id
                     FROM gescall_leads led
                     JOIN gescall_lists ls ON led.list_id = ls.list_id
-                    WHERE led.status = 'NEW'
+                    WHERE (led.status = 'NEW' OR (led.status = 'QUEUE' AND led.last_call_time IS NULL))
                       AND ls.campaign_id = $1
                       AND ls.active = true
+                      AND (cardinality($3::bigint[]) = 0 OR NOT (led.lead_id = ANY($3::bigint[])))
                     ORDER BY led.lead_id ASC
                     LIMIT 50000
                 ),
@@ -65,9 +79,11 @@ async function loadHopper() {
                        ) < (SELECT max_calls FROM active_rules)
                    )
                 LIMIT $2
-            `, [camp.campaign_id, toLoad]);
+            `, [camp.campaign_id, toLoad, excludeLeadIds]);
 
-            console.log(`Campaign ${camp.campaign_id} query returned ${rows.length} rows`);
+            if (rows.length > 0) {
+                console.log(`[Hopper] ${camp.campaign_id}: +${rows.length} (hopper was ${hopperSize}, exclude ${excludeLeadIds.length} in-redis)`);
+            }
 
             if (rows.length === 0) continue;
 

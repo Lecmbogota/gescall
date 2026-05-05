@@ -5,6 +5,70 @@ const pg = require('../config/pgDatabase');
 const redis = require('../config/redisClient');
 const pgDatabaseService = require('../services/pgDatabaseService');
 
+// ─── Disposition Cache (in-memory, TTL 5 min) ──────────────────────
+const dispositionCache = new Map(); // campaignId -> { fetchedAt, rows }
+const DISPOSITION_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getCampaignDispositionsCached(campaignId) {
+    const cached = dispositionCache.get(campaignId);
+    if (cached && (Date.now() - cached.fetchedAt) < DISPOSITION_CACHE_TTL_MS) {
+        return cached.rows;
+    }
+    const { rows } = await pg.query(
+        `SELECT id, code, label, color, sort_order, conditions FROM gescall_dispositions 
+         WHERE campaign_id = $1 AND active = true 
+         ORDER BY sort_order ASC`,
+        [campaignId]
+    );
+    const parsed = rows.map(r => ({
+        ...r,
+        conditions: typeof r.conditions === 'string' ? JSON.parse(r.conditions) : r.conditions
+    }));
+    dispositionCache.set(campaignId, { fetchedAt: Date.now(), rows: parsed });
+    return parsed;
+}
+
+function invalidateDispositionCache(campaignId) {
+    dispositionCache.delete(campaignId);
+}
+
+const DEFAULT_DISPOSITIONS = [
+    { code: 'TRANSFERIDO', label: 'Transferido', color: 'bg-green-500', sort_order: 1,
+      conditions: { dtmf: ['2'], call_status: ['XFER'], require_typification: true } },
+    { code: 'CONTESTADA',  label: 'Contestada',  color: 'bg-blue-500',  sort_order: 2,
+      conditions: { require_typification: true } },
+    { code: 'COMPLETADO',  label: 'Completado',  color: 'bg-blue-500',  sort_order: 3,
+      conditions: { call_status: ['COMPLET'] } },
+    { code: 'RECHAZADA',   label: 'Rechazada',   color: 'bg-orange-500', sort_order: 4,
+      conditions: { call_status: ['HANGUP'], exclude_typification: true } },
+    { code: 'FALLIDA',     label: 'Fallida',     color: 'bg-red-500',   sort_order: 5,
+      conditions: { call_status: ['FAILED'] } },
+    { code: 'NO_CONTESTA', label: 'No Contesta', color: 'bg-yellow-500', sort_order: 6,
+      conditions: { call_status: ['DIALING','IVR_START','NA','RINGING','AA','N'], lead_status: ['NA','AA','N','NEW','QUEUE'], exclude_typification: true } },
+    { code: 'OCUPADO',     label: 'Ocupado',     color: 'bg-purple-500', sort_order: 7,
+      conditions: { call_status: ['B','BUSY','CONGESTION','AB'], lead_status: ['B','AB'] } },
+    { code: 'CORTADA',     label: 'Cortada',     color: 'bg-red-400',  sort_order: 8,
+      conditions: { call_status: ['DROP','PDROP','XDROP'], lead_status: ['DROP','PDROP','XDROP'] } },
+    { code: 'BUZON',       label: 'Buzón',       color: 'bg-indigo-400', sort_order: 9,
+      conditions: { call_status: ['AM','AL'] } },
+    { code: 'NO_LLAMAR',   label: 'No Llamar',   color: 'bg-slate-500', sort_order: 10,
+      conditions: { call_status: ['DNC','DNCC'] } },
+    { code: 'VENTA',       label: 'Venta',       color: 'bg-emerald-600', sort_order: 11,
+      conditions: { call_status: ['SALE'], lead_status: ['SALE'] } },
+];
+
+async function seedDefaultDispositions(campaignId) {
+    for (const d of DEFAULT_DISPOSITIONS) {
+        await pg.query(
+            `INSERT INTO gescall_dispositions (campaign_id, code, label, color, sort_order, conditions, active, is_default)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, true)
+             ON CONFLICT (campaign_id, code) DO NOTHING`,
+            [campaignId, d.code, d.label, d.color, d.sort_order, JSON.stringify(d.conditions)]
+        );
+    }
+    invalidateDispositionCache(campaignId);
+}
+
 router.get('/', async (req, res) => {
     try {
         const { campaign_id, allowed_campaigns } = req.query;
@@ -211,7 +275,8 @@ router.get('/:campaign_id/stats', async (req, res) => {
                 moh_custom_file: campQuery.rows[0].moh_custom_file || null,
                 predictive_target_drop_rate: parseFloat(campQuery.rows[0].predictive_target_drop_rate) || 0.03,
                 predictive_min_factor: parseFloat(campQuery.rows[0].predictive_min_factor) || 1.0,
-                predictive_max_factor: parseFloat(campQuery.rows[0].predictive_max_factor) || 4.0
+                predictive_max_factor: parseFloat(campQuery.rows[0].predictive_max_factor) || 4.0,
+                dial_schedule: campQuery.rows[0].dial_schedule || null
             }
         });
     } catch (error) {
@@ -247,7 +312,8 @@ router.post('/:campaign_id/call-log', async (req, res) => {
                 l.tts_vars,
                 ls.list_name,
                 ls.list_name as list_description,
-                cl.uniqueid
+                cl.uniqueid,
+                cl.hangup_cause
             FROM gescall_call_log cl
             LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id AND cl.lead_id > 0
             LEFT JOIN gescall_lists ls ON cl.list_id = ls.list_id
@@ -273,7 +339,46 @@ router.post('/:campaign_id/call-log', async (req, res) => {
         query += ` ORDER BY cl.call_date DESC`;
 
         const { rows } = await pg.query(query, params);
-        res.json({ success: true, data: rows });
+
+        // Compute disposition for each row using cached campaign dispositions
+        const dispositions = await getCampaignDispositionsCached(campaign_id);
+        const dataWithDisposition = rows.map(record => {
+            let disposition = 'Desconocido';
+            for (const dispo of dispositions) {
+                if (matchDispositionConditions(record, dispo.conditions)) {
+                    disposition = dispo.label;
+                    break;
+                }
+            }
+            // Fallback to hardcoded if no DB dispositions configured
+            if (disposition === 'Desconocido' && dispositions.length === 0) {
+                const cs = (record.call_status || '').toUpperCase();
+                const ls = (record.lead_status || '').toUpperCase();
+                const dtmf = record.dtmf_pressed || '';
+                if (record.typification_name) disposition = 'Contestada';
+                else if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') disposition = 'Transferido';
+                else if (cs === 'COMPLET') disposition = 'Completado';
+                else if (cs === 'HANGUP') disposition = 'Rechazada';
+                else if (cs === 'ANSWER' || cs === 'UP') {
+                    if (dtmf === 'TIMEOUT') disposition = 'Contestada';
+                    else if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') disposition = 'Rechazada';
+                    else disposition = 'Contestada';
+                }
+                else if (cs === 'FAILED') disposition = 'Fallida';
+                else if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) disposition = 'No Contesta';
+                else if (['B','BUSY','CONGESTION','AB'].includes(cs)) disposition = 'Ocupado';
+                else if (['DROP','PDROP','XDROP'].includes(cs)) disposition = 'Cortada';
+                else if (['DNC','DNCC'].includes(cs)) disposition = 'No Llamar';
+                else if (['AM','AL'].includes(cs)) disposition = 'Buzón';
+                else if (['SALE'].includes(cs)) disposition = 'Venta';
+                else if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) disposition = 'Contestada';
+                else if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) disposition = 'No Contesta';
+                else disposition = cs || ls || 'Desconocido';
+            }
+            return { ...record, disposition };
+        });
+
+        res.json({ success: true, data: dataWithDisposition });
     } catch (error) {
         console.error('[pg_campaigns] Error fetching call log:', error);
         res.status(500).json({ success: false, error: error.message });
@@ -541,6 +646,42 @@ router.put('/:campaign_id/retry-settings', async (req, res) => {
         });
     } catch (error) {
         console.error('[pg_campaigns] Retry Settings Update Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== HORARIO DE DISCADO ====================
+
+router.put('/:campaign_id/dial-schedule', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const { dial_schedule } = req.body;
+
+        if (!dial_schedule || typeof dial_schedule !== 'object') {
+            return res.status(400).json({ success: false, error: 'dial_schedule debe ser un objeto JSON' });
+        }
+
+        const normalized = {
+            enabled: !!dial_schedule.enabled,
+            timezone: typeof dial_schedule.timezone === 'string' && dial_schedule.timezone.trim()
+                ? dial_schedule.timezone.trim()
+                : 'America/Mexico_City',
+            windows: Array.isArray(dial_schedule.windows) ? dial_schedule.windows : []
+        };
+
+        console.log(`[pg_campaigns] Updating campaign ${campaign_id} dial_schedule`);
+        await pg.query(
+            'UPDATE gescall_campaigns SET dial_schedule = $1::jsonb WHERE campaign_id = $2',
+            [JSON.stringify(normalized), campaign_id]
+        );
+
+        res.json({
+            success: true,
+            message: 'Horario de discado actualizado',
+            dial_schedule: normalized
+        });
+    } catch (error) {
+        console.error('[pg_campaigns] dial-schedule error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -875,6 +1016,9 @@ router.post('/create', async (req, res) => {
              VALUES ($1, $2, false, false, $3, 'RATIO', $4, $5, $6, $7, $8, $9, $10)`,
             [cid, cname, dial_prefix, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor]
         );
+
+        // Seed default dispositions for the new campaign
+        await seedDefaultDispositions(cid);
 
         // Create a user assigned to this campaign
         const userPass = `Gc${cid}!`;
@@ -1219,6 +1363,332 @@ router.post('/:id/recording-test-connection', async (req, res) => {
     } catch (error) {
         console.error('[recording-test-connection] Error:', error.message);
         res.status(200).json({ success: false, error: error.message || 'Error al probar la conexión' });
+    }
+});
+
+// ==================== EXPORT REPORT ENDPOINT ====================
+
+const translateHangupCause = (cause) => {
+    if (!cause) return 'Desconocido';
+    const c = String(cause).trim();
+    // Asterisk hangup cause codes: https://wiki.asterisk.org/wiki/display/AST/Hangup+Cause+Mappings
+    const map = {
+        '0': 'Desconocido',
+        '1': 'Número no asignado',
+        '3': 'Sin ruta al destino',
+        '16': 'Desconexión normal',
+        '17': 'Destino ocupado',
+        '18': 'No responde',
+        '19': 'Sin respuesta',
+        '20': 'Abonado ausente',
+        '21': 'Llamada rechazada por destino',
+        '22': 'Número cambiado',
+        '27': 'Destino fuera de servicio',
+        '28': 'Formato de número inválido',
+        '31': 'Desconexión normal (sin especificar)',
+        '34': 'Circuito ocupado',
+        '38': 'Red fuera de servicio',
+        '41': 'Error temporal',
+        '42': 'Congestión en red',
+        '43': 'Información de acceso rechazada',
+        '47': 'Recursos no disponibles',
+        '50': 'No suscrito',
+        '55': 'Llamada en progreso',
+        '57': 'Red no autorizada',
+        '58': 'No autorizado',
+        '65': 'Portabilidad no soportada',
+        '69': 'No implementado',
+        '79': 'Servicio no implementado',
+        '88': 'Formato incompatible',
+        '95': 'Mensaje no válido',
+        '102': 'Timeout / Expiró temporizador',
+        '111': 'Error de interconexión',
+        '127': 'Error de interoperabilidad',
+    };
+    return map[c] || `Causa de colgado: ${c}`;
+};
+
+// Condition matching for disposition evaluation (used by export-report + call-log)
+const matchDispositionConditions = (record, conditions) => {
+    if (!conditions || Object.keys(conditions).length === 0) return true;
+    const cs = (record.call_status || '').toUpperCase();
+    const ls = (record.lead_status || '').toUpperCase();
+    const dtmf = record.dtmf_pressed || '';
+    const duration = parseInt(record.length_in_sec || record.call_duration || '0');
+
+    // call_status and lead_status are OR'd: match if EITHER condition matches
+    let hasStatusCondition = false;
+    let statusMatched = false;
+
+    if (conditions.call_status && Array.isArray(conditions.call_status) && conditions.call_status.length > 0) {
+        hasStatusCondition = true;
+        if (conditions.call_status.includes(cs)) statusMatched = true;
+    }
+    if (conditions.lead_status && Array.isArray(conditions.lead_status) && conditions.lead_status.length > 0) {
+        hasStatusCondition = true;
+        if (conditions.lead_status.includes(ls)) statusMatched = true;
+    }
+    if (hasStatusCondition && !statusMatched) return false;
+
+    // dtmf, exclude_typification, require_typification, min_duration are AND conditions
+    if (conditions.dtmf && Array.isArray(conditions.dtmf) && conditions.dtmf.length > 0) {
+        if (!conditions.dtmf.includes(dtmf)) return false;
+    }
+    if (conditions.exclude_typification === true) {
+        if (record.typification_name) return false;
+    }
+    if (conditions.require_typification === true) {
+        if (!record.typification_name) return false;
+    }
+    if (typeof conditions.min_duration === 'number') {
+        if (duration < conditions.min_duration) return false;
+    }
+    return true;
+};
+
+/**
+ * Get disposition for a call record using campaign dispositions from DB.
+ * Falls back to hardcoded logic if no dispositions configured.
+ */
+const getDisposition = async (record, campaignId) => {
+    try {
+        const { rows: dispositions } = await pg.query(
+            `SELECT label, conditions FROM gescall_dispositions 
+             WHERE campaign_id = $1 AND active = true 
+             ORDER BY sort_order ASC`,
+            [campaignId]
+        );
+        if (dispositions.length > 0) {
+            for (const dispo of dispositions) {
+                const conds = typeof dispo.conditions === 'string' ? JSON.parse(dispo.conditions) : dispo.conditions;
+                if (matchDispositionConditions(record, conds)) {
+                    return dispo.label;
+                }
+            }
+        }
+    } catch (e) {
+        // DB query failed — fall through to hardcoded
+    }
+    // Hardcoded fallback
+    const cs = (record.call_status || '').toUpperCase();
+    const ls = (record.lead_status || '').toUpperCase();
+    const dtmf = record.dtmf_pressed || '';
+    if (record.typification_name) return 'Contestada';
+    if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') return 'Transferido';
+    if (cs === 'COMPLET') return 'Completado';
+    if (cs === 'HANGUP') return 'Rechazada';
+    if (cs === 'ANSWER' || cs === 'UP') {
+        if (dtmf === 'TIMEOUT') return 'Contestada';
+        if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') return 'Rechazada';
+        return 'Contestada';
+    }
+    if (cs === 'FAILED') return 'Fallida';
+    if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) return 'No Contesta';
+    if (['B','BUSY','CONGESTION','AB'].includes(cs)) return 'Ocupado';
+    if (['DROP','PDROP','XDROP'].includes(cs)) return 'Cortada';
+    if (['DNC','DNCC'].includes(cs)) return 'No Llamar';
+    if (['AM','AL'].includes(cs)) return 'Buzón';
+    if (['SALE'].includes(cs)) return 'Venta';
+    if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) return 'Contestada';
+    if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) return 'No Contesta';
+    return cs || ls || 'Desconocido';
+};
+
+router.post('/:campaign_id/export-report', async (req, res) => {
+    try {
+        const { campaign_id } = req.params;
+        const { startDatetime, endDatetime, includeRecordings, timezone, visibleColumns } = req.body;
+
+        if (!startDatetime || !endDatetime) {
+            return res.status(400).json({ success: false, error: 'startDatetime y endDatetime requeridos' });
+        }
+
+        console.log(`[Export] Request: campaign=${campaign_id}, start=${startDatetime}, end=${endDatetime}, includeRecordings=${includeRecordings}`);
+
+        // Fetch call log data
+        const callLogQuery = `
+            SELECT 
+                cl.log_id, cl.lead_id, cl.campaign_id, cl.list_id, cl.phone_number, 
+                cl.call_date, cl.call_status, cl.call_duration as length_in_sec, 
+                cl.dtmf_pressed, COALESCE(tr.agent_username, cl.transferred_to) as agent_username,
+                cl.typification_id, t.name as typification_name, tr.form_data as typification_data,
+                COALESCE(cl.call_direction, 'OUTBOUND') as call_direction,
+                ROW_NUMBER() OVER (PARTITION BY cl.lead_id ORDER BY cl.call_date ASC) as attempt_number,
+                l.status as lead_status, l.vendor_lead_code, l.called_count, l.tts_vars,
+                ls.list_name,                 ls.list_name as list_description,
+                cl.uniqueid,
+                cl.hangup_cause
+            FROM gescall_call_log cl
+            LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id AND cl.lead_id > 0
+            LEFT JOIN gescall_lists ls ON cl.list_id = ls.list_id
+            LEFT JOIN gescall_typifications t ON cl.typification_id = t.id
+            LEFT JOIN gescall_typification_results tr ON cl.log_id = tr.call_log_id
+            WHERE cl.campaign_id = $1
+              AND cl.call_date >= $2::timestamp
+              AND cl.call_date < ($3::timestamp + interval '1 day')
+            ORDER BY cl.call_date DESC
+        `;
+
+        const { rows } = await pg.query(callLogQuery, [campaign_id, startDatetime, endDatetime]);
+
+        // Build Excel
+        const XLSX = require('xlsx');
+        const columns = (visibleColumns && visibleColumns.length > 0)
+            ? visibleColumns
+            : ['sys_hora', 'sys_fecha', 'sys_disposicion', 'sys_estado', 'sys_duracion', 'sys_telefono', 'sys_dtmf', 'sys_lista', 'sys_desc', 'sys_callerid', 'sys_quien_colgo'];
+
+        // Fetch campaign dispositions once (cached) for efficient matching
+        const dispositionsMemo = await getCampaignDispositionsCached(campaign_id);
+
+        const getDispositionLocal = (record) => {
+            // DB-backed matching
+            for (const dispo of dispositionsMemo) {
+                if (matchDispositionConditions(record, dispo.conditions)) {
+                    return dispo.label;
+                }
+            }
+            // Hardcoded fallback
+            const cs = (record.call_status || '').toUpperCase();
+            const ls = (record.lead_status || '').toUpperCase();
+            const dtmf = record.dtmf_pressed || '';
+            if (record.typification_name) return 'Contestada';
+            if (dtmf === '2' || cs === 'XFER' || ls === 'XFER') return 'Transferido';
+            if (cs === 'COMPLET') return 'Completado';
+            if (cs === 'HANGUP') return 'Rechazada';
+            if (cs === 'ANSWER' || cs === 'UP') {
+                if (dtmf === 'TIMEOUT') return 'Contestada';
+                if (dtmf && dtmf !== '0' && dtmf !== 'NONE' && dtmf !== '') return 'Rechazada';
+                return 'Contestada';
+            }
+            if (cs === 'FAILED') return 'Fallida';
+            if (['DIALING','IVR_START','NA','RINGING','AA','N'].includes(cs)) return 'No Contesta';
+            if (['B','BUSY','CONGESTION','AB'].includes(cs)) return 'Ocupado';
+            if (['DROP','PDROP','XDROP'].includes(cs)) return 'Cortada';
+            if (['DNC','DNCC'].includes(cs)) return 'No Llamar';
+            if (['AM','AL'].includes(cs)) return 'Buzón';
+            if (['SALE'].includes(cs)) return 'Venta';
+            if (['SALE','PU','PM','XFER','A','COMPLET','ANSWER'].includes(ls)) return 'Contestada';
+            if (['NEW','NA','AA','B','N','DROP','PDROP','QUEUE'].includes(ls)) return 'No Contesta';
+            return cs || ls || 'Desconocido';
+        };
+
+        const headers = columns.map(col => {
+            const map = { sys_hora: 'Hora', sys_fecha: 'Fecha', sys_estado: 'Estado (Tipificación)', sys_disposicion: 'Disposición', sys_duracion: 'Duración',
+                sys_telefono: 'Teléfono', sys_dtmf: 'DTMF', sys_intentos: 'Reintentos', sys_lista: 'Lista',
+                sys_desc: 'Descripción Lista', sys_callerid: 'CallerID', sys_agente: 'Agente', sys_grabacion: 'Grabación', sys_quien_colgo: 'Quién Colgó' };
+            return map[col] || col.replace('dyn_', '').replace('form_', '');
+        });
+        headers.push('Campaign ID');
+
+        const tz = timezone || 'America/Bogota';
+
+        const formatDate = (dateStr, fmt) => {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            if (fmt === 'HH:mm:ss') return d.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false });
+            if (fmt === 'yyyy-MM-dd') return d.toLocaleDateString('fr-CA', { timeZone: tz });
+            return dateStr;
+        };
+
+        const getDisplayStatus = (record) => {
+            // Estado now returns the typification name, or a fallback
+            return record.typification_name || 'Sin tipificar';
+        };
+
+        const sheetData = rows.map((record) => {
+            const rowValues = columns.map(col => {
+                if (col === 'sys_hora') return formatDate(record.call_date, 'HH:mm:ss');
+                if (col === 'sys_fecha') return formatDate(record.call_date, 'yyyy-MM-dd');
+                if (col === 'sys_estado') return getDisplayStatus(record);
+                if (col === 'sys_disposicion') return getDispositionLocal(record);
+                if (col === 'sys_quien_colgo') return translateHangupCause(record.hangup_cause);
+                if (col === 'sys_duracion') return record.length_in_sec || 0;
+                if (col === 'sys_telefono' || col === 'sys_grabacion') return record.phone_number || '';
+                if (col === 'sys_dtmf') return record.dtmf_pressed || '';
+                if (col === 'sys_lista') return record.list_name || '';
+                if (col === 'sys_desc') return record.list_description || '';
+                if (col === 'sys_callerid') return '';
+                if (col === 'sys_agente') return record.agent_username || '';
+                if (col === 'sys_intentos') return record.attempt_number || 1;
+
+                const colName = col.replace('dyn_', '').replace('form_', '');
+                if (col.startsWith('dyn_')) {
+                    if (colName === 'telefono') return record.phone_number || '';
+                    if (record.tts_vars && record.tts_vars[colName]) return record.tts_vars[colName];
+                } else if (col.startsWith('form_')) {
+                    if (record.typification_data) {
+                        try {
+                            const parsed = typeof record.typification_data === 'string' ? JSON.parse(record.typification_data) : record.typification_data;
+                            if (parsed && parsed[colName] !== undefined) return parsed[colName];
+                        } catch(e) {}
+                    }
+                }
+                return '';
+            });
+            return [...rowValues, record.campaign_id];
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...sheetData]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Reporte');
+        const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+        const campaignName = (campaign_id || 'reporte').replace(/\s+/g, '_');
+        const dateStart = (startDatetime || '').replace(/[:\s]/g, '_').slice(0, 10);
+        const baseFilename = `reporte_${campaignName}_${dateStart}`;
+
+        if (includeRecordings) {
+            // Generate ZIP with Excel + recordings
+            const archiver = require('archiver');
+            const fs = require('fs');
+            const path = require('path');
+            
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename="${baseFilename}.zip"`);
+
+            const archive = archiver('zip', { zlib: { level: 9 } });
+            archive.pipe(res);
+
+            // Add Excel file
+            archive.append(excelBuffer, { name: `${baseFilename}.xlsx` });
+
+            // Add recordings
+            const recordingsPath = '/var/spool/asterisk/recording';
+            const recordsWithRecordings = rows.filter(r => r.uniqueid);
+            let addedCount = 0;
+
+            for (const record of recordsWithRecordings) {
+                const uid = record.uniqueid;
+                const filePath = path.join(recordingsPath, `${uid}.wav`);
+                try {
+                    if (fs.existsSync(filePath)) {
+                        archive.file(filePath, { name: `grabaciones/${uid}.wav` });
+                        addedCount++;
+                    }
+                } catch(e) {}
+            }
+
+            // Wait for finalize AND for the response to finish flushing
+            const finishPromise = new Promise((resolve) => {
+                res.on('close', resolve);
+                res.on('finish', resolve);
+            });
+            await archive.finalize();
+            await finishPromise;
+            console.log(`[Export] ZIP generated: ${baseFilename}.zip (${addedCount} recordings, ${rows.length} records)`);
+
+        } else {
+            // Excel only
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename="${baseFilename}.xlsx"`);
+            res.send(excelBuffer);
+        }
+
+    } catch (error) {
+        console.error('[export-report] Error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: error.message });
+        }
     }
 });
 

@@ -47,7 +47,7 @@ interface Campaign {
   lastActivity: string;
   hasCallerId?: boolean;
   hasBlacklist?: boolean;
-
+  campaign_type?: string;
   autoDialLevel?: string;
 }
 
@@ -195,9 +195,9 @@ export function CampaignListView({ campaigns, onSelectCampaign }: CampaignListVi
             <TableHeader className="sticky top-0 bg-white z-10 shadow-sm">
               <TableRow>
                 <TableHead className="bg-white">Campaña</TableHead>
+                <TableHead className="bg-white">Tipo</TableHead>
                 <TableHead className="bg-white">Progreso</TableHead>
                 <TableHead className="bg-white">Avance</TableHead>
-                <TableHead className="bg-white">Método</TableHead>
                 <TableHead className="bg-white">Estado</TableHead>
               </TableRow>
             </TableHeader>
@@ -234,6 +234,18 @@ export function CampaignListView({ campaigns, onSelectCampaign }: CampaignListVi
 
                     <TableCell>
                       {isLoading ? (
+                        <Skeleton className="h-5 w-20 rounded-full" />
+                      ) : (
+                        <Badge className="bg-slate-100 text-slate-600 border-slate-200 text-xs font-medium">
+                          {campaign.campaign_type === 'INBOUND' ? 'INBOUND' :
+                           campaign.campaign_type === 'OUTBOUND_PREDICTIVE' ? 'PREDICTIVO' :
+                           campaign.campaign_type === 'OUTBOUND_PROGRESSIVE' ? 'PROGRESIVO' : 'BLASTER'}
+                        </Badge>
+                      )}
+                    </TableCell>
+
+                    <TableCell>
+                      {isLoading ? (
                         <div className="w-40">
                           <Skeleton className="h-3 w-24 mb-2" />
                           <Skeleton className="h-2 w-full rounded-full" />
@@ -254,13 +266,6 @@ export function CampaignListView({ campaigns, onSelectCampaign }: CampaignListVi
                         <Skeleton className="h-4 w-12" />
                       ) : (
                         <div className="text-slate-900">{campaign.successRate}%</div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {isLoading ? (
-                        <Skeleton className="h-4 w-24" />
-                      ) : (
-                        <div className="text-slate-700">{campaign.dialingMethod}</div>
                       )}
                     </TableCell>
                     <TableCell>
