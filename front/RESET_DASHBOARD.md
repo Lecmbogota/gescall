@@ -30,45 +30,38 @@ localStorage.removeItem('dashboardLayouts');
 3. Luego selecciona "Restablecer Widgets"
 4. Recarga la página (F5)
 
-## Widgets con Datos Reales
+## Widgets con datos (GesCall nativo)
 
-Después del reset, verás estos widgets con datos de Vicibroker:
+Tras el reset, los KPIs del dashboard se alimentan del **backend GesCall** (PostgreSQL vía REST en `/api/campaigns/...`), no de Vicidial ni de un broker SQL externo.
 
-- **Nivel de Hopper**: Total de leads en cola
-- **Nivel Auto-Marcado**: Promedio de auto_dial_level
-- **Campañas Activas**: Campañas con active='Y'
-- **Listas Totales**: Número total de listas
-- **Total de Leads**: Suma de todos los leads
-- **Estado de Campañas**: Tabla con detalles de cada campaña
-- **Listas por Campaña**: Tabla con todas las listas
-
-## Configurar Campañas
+## Configurar campañas por defecto
 
 Para cambiar las campañas que se muestran:
 
-1. Ve a Configuración del Sistema (solo usuario 'desarrollo')
-2. Agrega el campo `defaultCampaigns` en la configuración
-3. Ejemplo:
+1. Ve a Configuración del Sistema (solo usuario `desarrollo`)
+2. Ajusta `defaultCampaigns` en la configuración guardada en localStorage (IDs de campaña GesCall)
+3. Ejemplo mínimo de URLs (sin Vicibroker):
+
 ```json
 {
-  "apiUrl": "http://164.92.67.176:3001/api",
-  "socketUrl": "http://164.92.67.176:3001",
-  "vicibrokerUrl": "http://209.38.233.46:8095",
-  "defaultCampaigns": ["LEGAXI01", "LEGAXI03", "CAMP03"]
+  "apiUrl": "http://TU_SERVIDOR:3001/api",
+  "socketUrl": "http://TU_SERVIDOR:3001",
+  "defaultCampaigns": ["1", "2"]
 }
 ```
+
 4. Guarda y recarga
 
-## Solución de Problemas
+## Solución de problemas
 
 ### El Dashboard sigue en blanco
 
-1. Verifica que Vicibroker esté corriendo en `http://209.38.233.46:8095`
-2. Abre la consola del navegador y busca errores de conexión
-3. Verifica que las campañas existan en Vicidial
+1. Comprueba que el backend responda (`VITE_API_URL` / login OK)
+2. Abre la consola del navegador y busca errores de red o de autenticación
+3. Verifica que existan campañas en PostgreSQL (`gescall_campaigns`) y que los IDs en `defaultCampaigns` coincidan
 
 ### No se muestran datos
 
-1. Verifica que las campañas especificadas existan en tu sistema
-2. Revisa los logs en la consola: `[Dashboard] Data received`
-3. Asegúrate de que Vicibroker esté respondiendo correctamente
+1. Confirma que las campañas indicadas existan en GesCall
+2. Revisa la consola: mensajes `[Dashboard]` o errores de `fetch`
+3. Comprueba permisos del token JWT y que `/api/campaigns/:id/stats` devuelva 200

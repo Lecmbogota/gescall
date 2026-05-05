@@ -1,4 +1,4 @@
-const pg = require('./config/pgDatabase');
+const pg = require('../config/pgDatabase');
 
 async function migrate() {
     try {

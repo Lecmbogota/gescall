@@ -52,7 +52,7 @@ El frontend web se compila y se sirve directamente con el Nginx del sistema oper
 cd /opt/gescall/front
 npm ci && npm run build
 
-# Nginx sirve los archivos desde /opt/gescall/front/dist
+# Nginx sirve los archivos desde el outDir de Vite (p. ej. /var/www/gescall — ver front/vite.config.ts)
 sudo systemctl restart nginx
 ```
 

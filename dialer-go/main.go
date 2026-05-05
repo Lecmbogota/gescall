@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -80,10 +81,13 @@ func main() {
 	}
 	log.Println("Connected to Redis")
 
-	// Clear stale call keys in Redis
+	// Si no hay SBC_* en .env, tomar el primer troncal activo de PostgreSQL (evita PJSIP/sbc233 y HOST vacío).
+	enrichSBCDefaultsFromDB(DB)
+
+	// Borrar claves gescall:call:* al arrancar (evita capacidad bloqueada por reinicios a mitad de marcación).
 	keys, err := Redis.Keys(ctx, "gescall:call:*").Result()
 	if err == nil && len(keys) > 0 {
-		log.Printf("Clearing %d stuck call keys from previous run...", len(keys))
+		log.Printf("Clearing %d gescall:call:* keys from Redis (dialer restart)...", len(keys))
 		Redis.Del(ctx, keys...)
 	}
 
@@ -98,4 +102,48 @@ func main() {
 
 	log.Println("Shutting down dialer...")
 	engine.Stop()
+}
+
+// enrichSBCDefaultsFromDB rellena SBC_* faltantes desde el primer troncal activo en PostgreSQL
+// (campañas sin trunk_id; evita endpoint fantasma "sbc233" y HOST vacío → ARI "Allocation failed").
+func enrichSBCDefaultsFromDB(db *sql.DB) {
+	needHost := strings.TrimSpace(os.Getenv("SBC_HOST")) == ""
+	ep := strings.TrimSpace(os.Getenv("SBC_ENDPOINT"))
+	needEp := ep == "" || ep == "sbc233"
+	if !needHost && !needEp {
+		return
+	}
+	var tid, host string
+	var port sql.NullInt64
+	err := db.QueryRow(`
+		SELECT trunk_id::text, COALESCE(NULLIF(TRIM(provider_host), ''), ''),
+		       provider_port
+		FROM gescall_trunks
+		WHERE active = true
+		ORDER BY trunk_id
+		LIMIT 1
+	`).Scan(&tid, &host, &port)
+	if err != nil {
+		log.Printf("[Dialer] Falta SBC_* y no hay troncal activo en BD: %v", err)
+		return
+	}
+	if host == "" {
+		log.Printf("[Dialer] Troncal %s sin provider_host; defina SBC_HOST en back/.env", tid)
+		return
+	}
+	if needEp {
+		_ = os.Setenv("SBC_ENDPOINT", tid)
+	}
+	if needHost {
+		_ = os.Setenv("SBC_HOST", host)
+	}
+	if strings.TrimSpace(os.Getenv("SBC_PORT")) == "" {
+		p := "5060"
+		if port.Valid && port.Int64 > 0 {
+			p = fmt.Sprintf("%d", port.Int64)
+		}
+		_ = os.Setenv("SBC_PORT", p)
+	}
+	log.Printf("[Dialer] SBC auto desde BD: ENDPOINT=%s HOST=%s PORT=%s",
+		os.Getenv("SBC_ENDPOINT"), os.Getenv("SBC_HOST"), os.Getenv("SBC_PORT"))
 }

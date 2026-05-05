@@ -204,8 +204,17 @@ class MaintenanceService {
             for (const key of keys) {
                 try {
                     const data = await redis.hGetAll(key);
-                    const startTime = parseInt(data?.start_time || '0');
-                    if (startTime && (now - startTime) > 3 * 60 * 1000) {
+                    const startTime = parseInt(data?.start_time || '0', 10);
+                    if (!startTime) continue;
+                    const age = now - startTime;
+                    const terminal =
+                        data?.ari_handled === 'YES' ||
+                        (data?.final_status && String(data.final_status).trim() !== '');
+                    // No borrar llamadas en curso: solo metadatos ya cerrados (Node escribió outcome) o huérfanos muy viejos
+                    if (terminal && age > 2 * 60 * 1000) {
+                        await redis.del(key);
+                        cleaned++;
+                    } else if (!terminal && age > 45 * 60 * 1000) {
                         await redis.del(key);
                         cleaned++;
                     }

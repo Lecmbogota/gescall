@@ -433,8 +433,7 @@ class ApiService {
     });
   }
   async getTTSTemplates() {
-    // The backend endpoint for tts/templates is not yet implemented in the DB.
-    // Return empty array gracefully to avoid 404 console errors.
+    // GesCall nativo: no hay catálogo global de plantillas TTS; usamos las de cada campaña (tts_templates en PG).
     return { success: true, data: [] };
   }
 
@@ -563,7 +562,7 @@ class ApiService {
     });
   }
 
-  // Dashboard data endpoints (replacement for Vicibroker)
+  // Dashboard: agregación de stats/listas por campaña (REST nativo)
   async getBulkCampaignsStatus(campaigns?: string[]) {
     // Para entornos PG, los endpoints /bulk pueden no estar disponibles.
     // Simulamos el comportamiento llamando a los endpoints individuales y uniendo las respuestas.

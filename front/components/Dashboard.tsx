@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { StandardPageHeader } from "./ui/layout/StandardPageHeader";
 import { Badge } from "./ui/badge";
-import type { CampaignStatusRow, ListCountRow } from "@/services/vicibroker";
+import type { CampaignStatusRow, ListCountRow } from "@/types/dashboardCampaign";
 import { useAuthStore } from "@/stores/authStore";
 import {
   Activity,
@@ -71,13 +71,13 @@ export function Dashboard({ username }: DashboardProps) {
   const { getCampaignIds, getUser, isLogged } = useAuthStore();
   const user = getUser();
 
-  // Vicibroker data states
+  // Datos del dashboard (REST + tiempo real)
   const [campaignsData, setCampaignsData] = useState<CampaignStatusRow[]>([]);
   const [listsCountData, setListsCountData] = useState<ListCountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch dashboard data from backend API (not Vicibroker)
+  // Carga inicial vía API GesCall
   useEffect(() => {
     let isSubscribed = true;
 
@@ -191,7 +191,7 @@ export function Dashboard({ username }: DashboardProps) {
     return data;
   };
 
-  // Transform Vicibroker data for widgets
+  // Formato para widgets a partir de listas por campaña
   const listsData = useMemo(() => {
     return listsCountData.map((item) => ({
       id: item.campaign_id,
@@ -217,10 +217,10 @@ export function Dashboard({ username }: DashboardProps) {
   }, [listsCountData]);
 
   const totalLeads = useMemo(() => {
-    // For now, use total lists as estimate
-    // TODO: Add query to get actual lead counts
-    return totalLists * 100; // Estimate 100 leads per list
-  }, [totalLists]);
+    const fromApi = listsCountData.reduce((acc, item) => acc + (Number(item.lead_count) || 0), 0);
+    if (fromApi > 0) return fromApi;
+    return totalLists * 100;
+  }, [listsCountData, totalLists]);
 
   const totalHopperLevel = useMemo(() => {
     return campaignsData.reduce((sum, campaign) => sum + (campaign.hopper_level || 0), 0);
@@ -886,11 +886,7 @@ export function Dashboard({ username }: DashboardProps) {
         break;
       case "clock-widget":
         content = (
-          <ClockWidget
-            timezone="America/Caracas"
-            showDate={true}
-            showSeconds={true}
-          />
+          <ClockWidget showDate={true} showSeconds={true} />
         );
         break;
       case "calendar-widget":

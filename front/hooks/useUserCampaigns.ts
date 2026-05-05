@@ -5,7 +5,7 @@ import type { Campaign } from '@/stores/authStore';
  * Custom hook to access user campaigns from auth store
  *
  * This hook provides easy access to the authenticated user's campaigns
- * for use in queries to Vicibroker or other services.
+ * for use in queries al API REST de GesCall (PostgreSQL).
  *
  * @returns Object with user campaign data and utility functions
  *
@@ -18,8 +18,8 @@ import type { Campaign } from '@/stores/authStore';
  *     return <div>No campaigns available</div>;
  *   }
  *
- *   // Use campaignIds for Vicibroker queries
- *   const result = await vicibroker.campaignsStatus(campaignIds);
+ *   // Use campaignIds para el API nativo
+ *   const rows = await api.getBulkCampaignsStatus(campaignIds);
  *
  *   return (
  *     <div>

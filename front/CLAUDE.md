@@ -1,10 +1,12 @@
 # CLAUDE.md
 
+> **2026 — GesCall nativo:** Panel y dialer sobre **PostgreSQL + Redis + Go + ARI**. No hay Vicibroker ni Vicidial API en el camino principal. Dashboard: `services/api.ts` → `/api/campaigns/...`. Tipos de filas: `types/dashboardCampaign.ts`. Párrafos más abajo sobre Vicibroker/Vicidial son **históricos** y pueden ignorarse.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-GESCALL Manager is a modern Vicidial administration panel built with React + TypeScript frontend and Node.js + Express + Socket.IO backend. The application provides real-time monitoring and management of call center operations through the Vicidial API.
+GesCall Manager: React + TypeScript (Vite) y backend Node.js + Express + Socket.IO, con motor de marcación en Go y datos en PostgreSQL (`gescall_*`).
 
 ## Development Commands
 
@@ -43,8 +45,6 @@ Open two terminals:
 **Real-time Communication:**
 - REST API via `services/api.ts` (singleton ApiService class) - Node.js backend
 - WebSocket via `services/socket.ts` (singleton SocketService class with Socket.IO) - Node.js backend
-- **Vicibroker WebSocket** via `services/vicibroker.ts` (singleton VicibrokerService class) - SQL query broker
-
 **Key Patterns:**
 - Single-page application with manual routing via state (`currentPage` in App.tsx)
 - Component-based architecture with strict TypeScript
@@ -55,10 +55,7 @@ Open two terminals:
 
 **Framework:** Node.js + Express + Socket.IO
 
-**API Integration:** Vicidial NON-AGENT API via HTTP requests
-- Service: `server/services/vicidialApi.js` (singleton VicidialAPI class)
-- Routes organized by resource: agents, campaigns, leads, lists
-- Pipe-delimited response parser included
+**API:** REST bajo `/api/*` contra el backend en `back/` (JWT). Sin integración Vicidial en el flujo principal.
 
 **Real-time Features:**
 - Socket.IO events for dashboard updates, lead uploads, agent monitoring
@@ -73,7 +70,7 @@ Open two terminals:
 The app uses three different services for data operations:
 1. **REST API** (`services/api.ts`): CRUD operations, queries, health checks to Node.js backend
 2. **WebSocket** (`services/socket.ts`): Real-time updates, batch uploads with progress, dashboard subscriptions to Node.js backend
-3. **Vicibroker WebSocket** (`services/vicibroker.ts`): SQL queries for reports, statistics, and campaign data from Vicibroker
+3. *(Obsoleto)* ~~Vicibroker~~ — eliminado; usar solo REST + Socket del backend GesCall.
 
 **Dynamic Configuration:**
 Both API and Socket services check `localStorage.systemSettings` first, then fall back to environment variables. This allows runtime configuration changes without restart.
@@ -123,86 +120,14 @@ Backend (every 5s) → Socket.IO broadcast → Frontend subscribeToDashboard() �
 Frontend UploadWizard → Socket emit 'upload:leads:start' → Backend batch processing → Progress events → Frontend progress bar → Complete event
 ```
 
-### Vicidial API Integration
+### Dashboard / campañas (nativo)
 ```
-Frontend request → Backend route → VicidialAPI service → HTTP request to Vicidial → Parse pipe-delimited response → Return to frontend
-```
-
-### Vicibroker Query Flow
-```
-Frontend component → vicibroker.query() → Socket.IO emit 'query' → Vicibroker server → SQL execution → Socket.IO emit 'result' → Callback/Promise → State update
+Frontend → api.getBulkCampaignsStatus / getBulkListsCount → GET /api/campaigns/:id/stats|lists → PostgreSQL
 ```
 
-## Vicibroker Integration
+## Vicibroker (obsoleto)
 
-**What is Vicibroker:**
-Vicibroker is a SQL query broker that exposes Vicidial database queries via WebSocket (Socket.IO). It provides real-time access to call center data for reports, statistics, and campaign monitoring.
-
-**Connection Details:**
-- URL: `http://209.38.233.46:8095`
-- Path: `/ws`
-- Protocol: Socket.IO
-- Send Event: `query`
-- Receive Event: `result`
-
-**Available Queries:**
-1. `dial_log_by_campaign_date_range` - Get call logs by campaign and date
-2. `status_summary_by_list` - Get status counts grouped by list
-3. `campaign_progress_by_list` - Get campaign progress metrics per list
-4. `campaigns_status` - Get current status of campaigns
-5. `lists_count_by_campaign` - Get lead counts by list and campaign
-6. `progress_for_single_campaign` - Get detailed progress for ONE campaign (not array)
-
-**Query Message Format:**
-```typescript
-{
-  type: 'query',
-  name: 'campaigns_status',
-  payload: { campaigns: ['CAMP01', 'CAMP02'] }
-}
-```
-
-**Response Format:**
-```typescript
-{
-  ok: true,
-  name: 'campaigns_status',
-  rows: [ /* data array */ ],
-  meta: { durationMs: 123, rows: 10, ts: '2025-10-28T...' }
-}
-```
-
-**Using Vicibroker Service:**
-```typescript
-import vicibroker from '@/services/vicibroker';
-
-// Connect (auto-connects on first query)
-vicibroker.connect();
-
-// Query with Promise
-const result = await vicibroker.campaignsStatus(['CAMP01', 'CAMP02']);
-if (result.ok) {
-  console.log(result.rows);
-}
-
-// Query with callback
-vicibroker.query('campaigns_status',
-  { campaigns: ['CAMP01'] },
-  (result) => {
-    if (result.ok) {
-      setData(result.rows);
-    }
-  }
-);
-```
-
-**Important Notes:**
-- Always validate that `campaigns` array is not empty before queries that require it
-- `progress_for_single_campaign` accepts a single string, NOT an array
-- Query results include metadata: duration, row count, timestamp
-- Use `limit` parameter to prevent huge responses (default: 1000)
-- Service auto-reconnects with 5 attempts, 1s delay
-- All methods return Promise for async/await usage
+Integración eliminada. No usar `vicibroker.ts` (archivo borrado).
 
 ## Path Aliases
 
@@ -226,16 +151,11 @@ TypeScript/Vite path alias configured:
 - Reconnection enabled with 5 attempts, 1s delay
 
 **LocalStorage Usage:**
-- `systemSettings` - Backend URLs, Vicidial credentials, dashboard config
+- `systemSettings` — URLs del backend (`apiUrl`, `socketUrl`), `defaultCampaigns`, etc.
 - `dashboardLayout` - Widget positions and sizes
 - `widgetStates` - Enabled/disabled state per widget
 - `favoriteMenu` - User's default menu preference
 - Widget-specific keys: `sticky-note-content`, `todo-list-tasks`, etc.
-
-**Vicidial API Response Format:**
-- Pipe-delimited text with header row
-- Success detection: Check if response contains "ERROR:"
-- Parser: `vicidialApi.parseResponse()` converts to array of objects
 
 **Widget Development Pattern:**
 1. Create component in `components/widgets/`
@@ -248,21 +168,12 @@ TypeScript/Vite path alias configured:
 
 ### Frontend (.env)
 ```
-VITE_API_URL=http://164.92.67.176:3001/api
-VITE_SOCKET_URL=http://164.92.67.176:3001
-VITE_VICIBROKER_URL=http://209.38.233.46:8095
+VITE_API_URL=http://localhost:3001/api
+VITE_SOCKET_URL=http://localhost:3001
 ```
 
-### Backend (server/.env)
-```
-PORT=3001
-NODE_ENV=development
-VICIDIAL_API_URL=http://your-vicidial-server/vicidial/non_agent_api.php
-VICIDIAL_API_USER=your_api_user
-VICIDIAL_API_PASS=your_api_password
-VICIDIAL_SOURCE=admin_panel
-CORS_ORIGIN=http://164.92.67.176:5173
-```
+### Backend (`back/.env`)
+Ver variables en `back/` (PostgreSQL, JWT, Redis, ARI, etc.). GesCall no requiere Vicidial en el flujo principal.
 
 ## Important Implementation Notes
 
@@ -279,25 +190,16 @@ CORS_ORIGIN=http://164.92.67.176:5173
 - Smooth transitions (350ms ease-out)
 - Layout changes auto-save to localStorage
 
-**Mock Data:**
-- Agent monitoring currently uses mock data (see AgentMonitor.tsx)
-- Dashboard KPIs use mock data until Vicidial integration complete
-- Campaign data fetched from backend but may be simulated
-
-**Vicidial Integration Status:**
-- Backend service fully implemented for: lists, leads, campaigns, agents
-- Frontend consumes API for campaign management
-- Real-time agent monitoring planned but not yet integrated
-- Lead upload with progress tracking fully functional via WebSocket
+**Datos reales vs mock:**
+- Parte del monitor de agentes puede usar datos de prueba según componente
+- KPIs de campaña: REST `api.ts` → `/api/campaigns/*`
 
 ## Common Development Tasks
 
 **Adding a New API Endpoint:**
-1. Add method to `server/services/vicidialApi.js`
-2. Create route in `server/routes/[resource].js`
-3. Register route in `server/server.js`
-4. Add method to `services/api.ts`
-5. Use in component
+1. Ruta en `back/routes/` y registro en `back/server.js` (o módulo de rutas que use el proyecto)
+2. Método en `services/api.ts`
+3. Uso en componente con token JWT del `ApiService`
 
 **Adding a New Widget:**
 1. Create component in `components/widgets/NewWidget.tsx`
@@ -307,30 +209,12 @@ CORS_ORIGIN=http://164.92.67.176:5173
 5. Test all size variants (sm/md/lg/xl)
 
 **Adding Real-time Event:**
-1. Add Socket.IO event handler in `server/server.js`
-2. Add method to `services/socket.ts`
-3. Use in component with cleanup in useEffect
+1. Handler en `back/sockets/` (Socket.IO del backend GesCall)
+2. Método en `services/socket.ts`
+3. Uso en componente con cleanup en `useEffect`
 
 **Modifying Layout System:**
 - Grid system: react-grid-layout (12 columns, 60px rows, 10px margin)
 - Layouts stored per breakpoint: lg, md, sm, xs, xxs
 - Modify in Dashboard.tsx `layouts` state
 - Changes auto-persist via `onLayoutChange`
-
-**Using Vicibroker in Components:**
-1. Import service: `import vicibroker from '@/services/vicibroker'`
-2. Connect on mount: `useEffect(() => { vicibroker.connect(); }, [])`
-3. Query with async/await:
-   ```typescript
-   const fetchData = async () => {
-     try {
-       const result = await vicibroker.campaignsStatus(['CAMP01']);
-       if (result.ok) setData(result.rows);
-     } catch (error) {
-       console.error('Query failed:', error);
-     }
-   };
-   ```
-4. Clean up on unmount: `useEffect(() => { return () => vicibroker.disconnect(); }, [])`
-5. Handle errors gracefully with try/catch or .catch()
-6. Use loading states while querying

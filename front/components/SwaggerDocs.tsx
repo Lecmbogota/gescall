@@ -57,7 +57,7 @@ const SwaggerDocs: React.FC = () => {
                     <div className="scalar-container light bg-white overflow-y-auto max-h-[calc(100vh-250px)]">
                         <ApiReferenceReact
                             configuration={{
-                                spec: { content: spec },
+                                content: spec,
                                 theme: 'default',
                                 hideDownloadButton: true,
                                 hideModels: true,

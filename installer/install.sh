@@ -104,13 +104,9 @@ pm2 start server.js --name "gescall-backend"
 pm2 save
 pm2 startup | bash
 
-# 6. Vicidial Integration
-echo -e "${GREEN}[5/5] Vicidial Integration...${NC}"
-read -p "Do you want to deploy AGI scripts to Vicidial now? (y/n) " DEPLOY_AGI
-if [[ "$DEPLOY_AGI" =~ ^[Yy]$ ]]; then
-    cd "$INSTALL_DIR/back"
-    node deploy-agi.js
-fi
+# 6. GesCall nativo = ARI (sin AGI Vicidial)
+echo -e "${GREEN}[5/5] GesCall (ARI/Stasis)${NC}"
+echo "IVR y control de canal: backend Node (ariService.js, app gescall-ivr). No se despliegan AGIs Vicidial desde este instalador."
 
 echo -e "${BLUE}==============================================${NC}"
 echo -e "${GREEN}       Installation Complete!         ${NC}"

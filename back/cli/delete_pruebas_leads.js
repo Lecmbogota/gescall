@@ -1,5 +1,5 @@
-const pg = require('./config/pgDatabase');
-const redis = require('./config/redisClient');
+const pg = require('../config/pgDatabase');
+const redis = require('../config/redisClient');
 
 async function main() {
     try {

@@ -219,12 +219,21 @@ module.exports = function(io, { databaseService }) {
         // Save socket reference to easily handle disconnect
         socket.agentUsername = username;
         
-        // Write state to Redis IMMEDIATELY (before any slow DB query)
-        // This prevents a race condition where disconnect sets OFFLINE first
-        // and then the state update overwrites it back to READY.
+        const newState = state || 'UNKNOWN';
+        // Conservar last_change si el estado no ha cambiado: el front envía heartbeat cada 15s
+        // y al hacer logout/login rápido el estado real (READY/PAUSED/...) suele ser el mismo;
+        // sobrescribir last_change reiniciaría el cronómetro de "Duración" cada heartbeat.
+        const prev = await redis.hGetAll(`gescall:agent:${username}`).catch(() => ({}));
+        const prevState = prev && prev.state ? String(prev.state) : '';
+        const prevLastChange = prev && prev.last_change ? parseInt(prev.last_change, 10) : 0;
+        const stateChanged = prevState !== newState;
+        const lastChange = stateChanged
+          ? (timestamp || Date.now())
+          : (prevLastChange || timestamp || Date.now());
+
         const payload = {
-          state: state || 'UNKNOWN',
-          last_change: timestamp || Date.now(),
+          state: newState,
+          last_change: lastChange,
           socket_id: socket.id
         };
         // El dialer predictivo/progresivo (Go) cuenta agentes READY con campaign_ids o campaign_id.
@@ -266,13 +275,18 @@ module.exports = function(io, { databaseService }) {
     socket.on('disconnect', async () => {
       if (socket.agentUsername) {
         try {
+          // Conservar last_change anterior: si vuelve a entrar pronto al MISMO estado (READY, PAUSED, …),
+          // el cronómetro de "Duración" no se reinicia (gescall:state:update también lo respeta cuando no cambia).
+          const prev = await redis.hGetAll(`gescall:agent:${socket.agentUsername}`).catch(() => ({}));
+          const prevLastChange = prev && prev.last_change ? parseInt(prev.last_change, 10) : 0;
+          const lastChange = prevLastChange || Date.now();
           await redis.hSet(`gescall:agent:${socket.agentUsername}`, {
             state: 'OFFLINE',
-            last_change: Date.now()
+            last_change: lastChange
           });
-          io.emit('dashboard:realtime:update', { 
+          io.emit('dashboard:realtime:update', {
             timestamp: new Date().toISOString(),
-            agent_update: { username: socket.agentUsername, state: 'OFFLINE', last_change: Date.now(), extension_status: extensionStatusCache[socket.agentUsername] || 'N/A' } 
+            agent_update: { username: socket.agentUsername, state: 'OFFLINE', last_change: lastChange, extension_status: extensionStatusCache[socket.agentUsername] || 'N/A' }
           });
         } catch (err) {
           console.error('[Socket.IO] Error on agent disconnect:', err.message);

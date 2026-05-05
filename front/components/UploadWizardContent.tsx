@@ -486,7 +486,8 @@ export function UploadWizardContent({
                 </div>
               </div>
 
-              {/* TTS Template Selector */}
+              {/* Plantillas TTS globales no existen en GesCall nativo; por campaña en Ajustes > Plantillas TTS */}
+              {ttsTemplates.length > 0 ? (
               <div>
                 <Label className="mb-2 block">
                   📄 Plantilla TTS <span className="text-xs text-slate-500">(opcional)</span>
@@ -516,6 +517,11 @@ export function UploadWizardContent({
                   </div>
                 )}
               </div>
+              ) : (
+                <p className="text-xs text-slate-500 rounded-md border border-slate-100 bg-slate-50/80 px-3 py-2">
+                  Las plantillas TTS se definen por campaña en <strong>Ajustes → Plantillas TTS</strong>. El asistente de carga usa las columnas del Excel como variables en el IVR.
+                </p>
+              )}
 
               <div>
                 <Label

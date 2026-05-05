@@ -7,7 +7,7 @@ back/         Node.js + Express + Socket.IO backend (npm, port 3001)
 front/        React + TypeScript + Vite frontend (npm, port 5173)
 dialer-go/    Go outbound dialer engine (binary, PM2-managed)
 database_schemas/  PostgreSQL dump files
-deploy-package/    Asterisk AGI scripts, dialplan, install.sh
+deploy-package/    Dialplan mínimo + install.sh (sin AGI; IVR por ARI/Stasis)
 installer/    Bare-metal install/setup scripts
 ```
 
@@ -41,13 +41,15 @@ PM2 manages the backend + dialer:
 pm2 start ecosystem.config.js   # → gescall-backend (port 3001) + gescall-dialer
 ```
 
-Nginx serves the frontend at port 8081 (`host-nginx.conf`). The frontend build writes directly to `/var/www/gescall` (see `front/vite.config.ts` → `build.outDir`).
+Nginx serves the frontend at port 8081 (`host-nginx.conf`). The frontend build writes directly to `/var/www/gescall` (see `front/vite.config.ts` → `build.outDir`). El mismo `host-nginx.conf` incluye **`location /ws`** hacia Asterisk (`transport-ws`, típicamente puerto **8088**): el WebRTC/JsSIP del agente usa `wss://<host>/ws`; si falta ese bloque, el navegador verá **502** en el handshake y el estado SIP quedará desconectado.
 
 Required infrastructure services (started via systemd): PostgreSQL 16, Redis, ClickHouse, Asterisk 16+, Piper TTS (Python, port 5000).
 
 ## Environment variables
 
 **back/.env** — manually loaded by `server.js` at startup (not `dotenv.config()`; reads with `fs + dotenv.parse`). The Go dialer reads this **same file** via a hardcoded absolute path: `/opt/gescall/back/.env` (`dialer-go/main.go:25`). Migrations also parse this file the same way before requiring `pgDatabase`.
+
+**ARI (`ariService.js`):** solo PostgreSQL (`pg`); no hay pool MySQL ni tablas `vicidial_*` en el motor IVR. `ariService.init(io)` en `server.js`.
 
 Key non-obvious vars the Go dialer needs:
 - `ARI_URL`, `ARI_USER`, `ARI_PASS` — Asterisk REST Interface (default `http://127.0.0.1:8088`)
@@ -79,10 +81,9 @@ Rate limiting: 200 req/min on `/api`, 10 req/15min on `/api/auth/login`.
 ## Frontend conventions
 
 - **SPA routing**: Manual page switching via React state (`currentPage` in `App.tsx`), not a router library.
-- **Triple service pattern**: The frontend uses three data sources:
-  1. `services/api.ts` — singleton `ApiService` class; REST calls to Node backend
-  2. `services/socket.ts` — singleton `SocketService`; Socket.IO for real-time events, upload progress, agent state broadcasts
-  3. `services/vicibroker.ts` — singleton `VicibrokerService`; separate WebSocket to a remote SQL broker (hardcoded IP, not local)
+- **Dual service pattern**: El front usa dos fuentes de datos (GesCall nativo):
+  1. `services/api.ts` — singleton `ApiService`; REST al backend Node (`/api/*`)
+  2. `services/socket.ts` — singleton `SocketService`; Socket.IO para eventos en tiempo real, progreso de carga, etc.
 - **Path alias**: `@/` resolves to the frontend project root (`./`), **not** `src/`.
 - **State**: LocalStorage + React hooks + Zustand (`stores/`). No Redux.
 - **UI library**: Radix UI primitives + shadcn/ui components + Tailwind CSS 4 (`@tailwindcss/postcss` plugin).
@@ -92,13 +93,13 @@ Rate limiting: 200 req/min on `/api`, 10 req/15min on `/api/auth/login`.
 
 ## Backend conventions
 
-- **Database**: PostgreSQL native (via `pg` module). The old Vicidial MySQL layer (`services/vicidialApi.js`, `config/vicidial.js`) still exists as fallback but the primary path is native PG.
+- **Database**: PostgreSQL nativo (`pg`). GesCall no depende de Vicidial; el panel y el dialer usan solo tablas `gescall_*`.
 - **Routes are all under `/api/*`** with JWT auth middleware (`middleware/jwtAuth.js`).
 - **Socket.IO** events are defined in `sockets/index.js`, not in `server.js` directly.
 - **Migrations**: Mixed format — `.js` scripts (`back/migrations/`) and raw `.sql` files. JS migrations follow a three-digit numbering prefix (`015_<name>.js`). Run JS migrations with `node migrations/<name>.js` from `back/`. Migrations manually parse `.env` before requiring `pgDatabase` — standalone `node -e` scripts that use `pgDatabase` directly will fail unless you replicate this pattern.
 - **pgDatabase pool**: Exports `query(text, params)` and `pool` (for transactions). Max pool size is 500 (not the default 10).
 - **Swagger docs** auto-generated at `/api/docs` (UI) and `/api/docs.json` (spec), with role-based endpoint filtering.
-- **CLI tools**: Various one-off scripts in `back/cli/` (list management, dialplan updates, AGI deployment, etc.) — not connected to any task runner.
+- **CLI tools**: En `back/cli/` y `back/tools/` hay utilidades PG/SSH y pruebas sueltas. **No hay MySQL** en el producto ni scripts archivados en el repo; el esquema es solo PostgreSQL (`back/migrations/`, `back/scripts/*.sql` donde aplique).
 
 ## Call typification (tipificaciones)
 
@@ -120,4 +121,4 @@ Agent UI: `AgentWorkspace.tsx` loads typifications dynamically for the agent's a
 
 - `front/CLAUDE.md` — Detailed frontend architecture, component tree, Vicibroker usage, widget development patterns, data flow diagrams. Authoritative for frontend work.
 - `README.md` — High-level architecture diagram and component overview.
-- `deploy-package/GESCALL_REPLICATION_GUIDE.md` — Full call flow including Asterisk dialplan, AGI scripts, and SIP trunk configuration.
+- `deploy-package/GESCALL_REPLICATION_GUIDE.md` — Despliegue Asterisk + PostgreSQL (sin MySQL/Vicidial); checklist y verificación `psql`.

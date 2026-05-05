@@ -28,9 +28,8 @@ type ARIClient struct {
 func NewARIClient() *ARIClient {
 	url := os.Getenv("ARI_URL")
 	if url == "" {
-		// 127.0.0.1: Asterisk http.conf suele usar bindaddr=127.0.0.1; "localhost"
-		// en Go puede resolver a [::1] y fallar con connection refused.
-		url = "http://127.0.0.1:8088"
+		// 8078: típico si transport-ws PJSIP usa 8088; ver http.conf bindport y back/.env ARI_URL
+		url = "http://127.0.0.1:8078"
 	}
 	user := os.Getenv("ARI_USER")
 	pass := os.Getenv("ARI_PASS")

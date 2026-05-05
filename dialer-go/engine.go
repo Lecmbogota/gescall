@@ -82,10 +82,8 @@ func NewDialerEngine() *DialerEngine {
 		maxCps = 15 // Lowered safe default for SIP UDP
 	}
 
-	endpoint := os.Getenv("SBC_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "sbc233"
-	}
+	endpoint := strings.TrimSpace(os.Getenv("SBC_ENDPOINT"))
+	// Sin placeholder: SBC_* en .env o enrichSBCDefaultsFromDB() en main.go.
 	host := os.Getenv("SBC_HOST")
 	port := os.Getenv("SBC_PORT")
 	if port == "" {
@@ -604,17 +602,26 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 
 	// Target URI - use per-campaign trunk if set, otherwise global defaults
 	fullNumber := camp.DialPrefix + targetPhone
+	if camp.TrunkEndpoint == "" && (strings.TrimSpace(d.sbcEndpoint) == "" || strings.TrimSpace(d.sbcHost) == "") {
+		log.Printf("[ARI Originate Skipped] lead=%s: sin trunk en campaña ni SBC_ENDPOINT+SBC_HOST (troncal activo en BD o .env)", leadID)
+		DB.Exec("UPDATE gescall_leads SET status = 'NEW', last_call_time = NULL WHERE lead_id = $1", leadID)
+		return
+	}
+	// Formato recomendado PJSIP: PJSIP/<número>@<endpoint> (outbound_auth / AOR del troncal).
+	// El estilo PJSIP/endpoint/sip:user@host falla en algunos despliegues con "Allocation failed".
 	var endpointURI string
 	if camp.TrunkEndpoint != "" {
-		// Campaign has a specific trunk assigned
-		trunkPrefix := camp.TrunkPrefix
-		if trunkPrefix == "" {
-			trunkPrefix = d.sbcPrefix // fallback to global
+		dialDigits := camp.TrunkPrefix + fullNumber
+		if dialDigits == "" {
+			dialDigits = fullNumber
 		}
-		endpointURI = fmt.Sprintf("PJSIP/%s/sip:%s%s@%s:%s", camp.TrunkEndpoint, trunkPrefix, fullNumber, camp.TrunkHost, camp.TrunkPort)
+		endpointURI = fmt.Sprintf("PJSIP/%s@%s", dialDigits, camp.TrunkEndpoint)
 	} else {
-		// Use global SBC defaults from env
-		endpointURI = fmt.Sprintf("PJSIP/%s/sip:%s%s@%s:%s", d.sbcEndpoint, d.sbcPrefix, fullNumber, d.sbcHost, d.sbcPort)
+		dialDigits := d.sbcPrefix + fullNumber
+		if dialDigits == "" {
+			dialDigits = fullNumber
+		}
+		endpointURI = fmt.Sprintf("PJSIP/%s@%s", dialDigits, d.sbcEndpoint)
 	}
 
 	// Get Dynamic CallerID

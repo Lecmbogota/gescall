@@ -39,13 +39,6 @@ const schedulerService = require('./services/schedulerService');
 const uploadTaskService = require('./services/uploadTaskService');
 const ariService = require('./services/ariService');
 
-const DEBUG_LOG_PATH = '/opt/gescall/.cursor/debug.log';
-const writeDebugLog = (payload) => {
-  try {
-    fs.appendFileSync(DEBUG_LOG_PATH, `${JSON.stringify(payload)}\n`);
-  } catch { }
-};
-
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
@@ -261,7 +254,7 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3001;
 
 console.log('✓ PostgreSQL Native Mode active');
-ariService.init(null, io).catch(err => console.warn('⚠ ARI init deferred:', err.message));
+ariService.init(io).catch(err => console.warn('⚠ ARI init deferred:', err.message));
 
 console.log('[Routing] Go Dialer Engine handles calls now.');
 const { initClickHouse } = require('./config/clickhouse');

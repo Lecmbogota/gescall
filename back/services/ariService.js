@@ -19,7 +19,6 @@ const ARI_USER = process.env.ARI_USER || 'gescall';
 const ARI_PASS = process.env.ARI_PASS || 'gescall_ari_2026';
 
 let ari = null;
-let db = null;
 let io = null;
 
 // Active calls tracking
@@ -32,10 +31,9 @@ const queueWaiters = new Map(); // campaignId -> [{ channelId, joinTime, leadId 
 let dispatcherInterval = null;
 
 /**
- * Initialize ARI connection
+ * Initialize ARI connection (solo PostgreSQL + Redis; sin MySQL).
  */
-async function init(dbPool, socketIo) {
-    db = dbPool;
+async function init(socketIo) {
     io = socketIo;
 
     // Ensure TTS cache directory exists
@@ -64,7 +62,7 @@ async function init(dbPool, socketIo) {
     } catch (err) {
         console.error('[ARI] Failed to connect:', err.message);
         // Retry after 5 seconds
-        setTimeout(() => init(dbPool, socketIo), 5000);
+        setTimeout(() => init(socketIo), 5000);
     }
 }
 
@@ -444,18 +442,6 @@ async function handleStasisStart(event, channel) {
             }
         } catch (e) { /* variable not set */ }
 
-        // Determine if call is native to gescall (uses PostgreSQL)
-        let isNative = process.env.USE_GESCALL_DIALER === 'true';
-        try {
-            const nativeVar = await channel.getChannelVar({ variable: 'GESCALL_NATIVE' });
-            if (nativeVar && nativeVar.value === 'YES') {
-                isNative = true;
-                console.log(`[ARI] Call is explicitly native (PostgreSQL)`);
-            } else if (nativeVar && nativeVar.value === 'NO') {
-                isNative = false;
-            }
-        } catch (e) { /* variable not set */ }
-
         // Resolve campaign from lead
         let campaignId = '';
         let listId = 0;
@@ -500,97 +486,46 @@ async function handleStasisStart(event, channel) {
         }
 
         if (leadId > 0 && !campaignId) {
-            if (isNative) {
-                try {
-                    const pgRows = await pg.query(
-                        `SELECT l.list_id, l.comments, l.phone_number, l.first_name, l.last_name,
-                                l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id,
-                                camp.trunk_id
-                         FROM gescall_leads l
-                         LEFT JOIN gescall_lists lst ON l.list_id = lst.list_id
-                         LEFT JOIN gescall_campaigns camp ON lst.campaign_id = camp.campaign_id
-                         WHERE l.lead_id = $1 LIMIT 1`, [leadId]
-                    );
-
-                    if (pgRows.rows.length > 0) {
-                        const r = pgRows.rows[0];
-                        listId = r.list_id;
-                        campaignId = r.campaign_id || '';
-                        comments = r.comments || '';
-                        phoneNumber = r.phone_number || '';
-                        firstName = r.first_name || '';
-                        lastName = r.last_name || '';
-                        vendorLeadCode = r.vendor_lead_code || '';
-                        state = r.state || '';
-                        altPhone = r.alt_phone || '';
-
-                        // Load native custom variables from tts_vars
-                        if (r.tts_vars && typeof r.tts_vars === 'object') {
-                            customVars = { ...r.tts_vars };
-                        }
-                        if (r.trunk_id) customVars['trunk_id'] = r.trunk_id;
-                    }
-
-                    if (campaignId) {
-                        const campRows = await pg.query(
-                            `SELECT xferconf_c_number FROM gescall_campaigns WHERE campaign_id = $1 LIMIT 1`,
-                            [campaignId]
-                        );
-                        if (campRows.rows.length > 0) {
-                            transferNumber = (campRows.rows[0].xferconf_c_number || '').trim();
-                        }
-                    }
-                } catch (err) {
-                    console.error(`[ARI] Error resolving native lead ${leadId} from PostgreSQL:`, err.message);
-                }
-            } else if (db) {
-                const [rows] = await db.execute(
-                    `SELECT vl.list_id, vl.comments, vl.phone_number, vl.first_name, vl.last_name, 
-                            vl.vendor_lead_code, vl.state, vl.alt_phone, vls.campaign_id
-                     FROM vicidial_list vl
-                     LEFT JOIN vicidial_lists vls ON vl.list_id = vls.list_id
-                     WHERE vl.lead_id = ? LIMIT 1`, [leadId]
+            try {
+                const pgRows = await pg.query(
+                    `SELECT l.list_id, l.comments, l.phone_number, l.first_name, l.last_name,
+                            l.vendor_lead_code, l.state, l.alt_phone, l.tts_vars, lst.campaign_id,
+                            camp.trunk_id
+                     FROM gescall_leads l
+                     LEFT JOIN gescall_lists lst ON l.list_id = lst.list_id
+                     LEFT JOIN gescall_campaigns camp ON lst.campaign_id = camp.campaign_id
+                     WHERE l.lead_id = $1 LIMIT 1`, [leadId]
                 );
-                if (rows.length > 0) {
-                    listId = rows[0].list_id;
-                    campaignId = rows[0].campaign_id || '';
-                    comments = rows[0].comments || '';
-                    phoneNumber = rows[0].phone_number || '';
-                    firstName = rows[0].first_name || '';
-                    lastName = rows[0].last_name || '';
-                    vendorLeadCode = rows[0].vendor_lead_code || '';
-                    state = rows[0].state || '';
-                    altPhone = rows[0].alt_phone || '';
 
-                    // Load generic custom variables from vicidial_custom_$list_id
-                    if (listId > 0) {
-                        try {
-                            const customTableName = `vicidial_custom_${listId}`;
-                            const [customRows] = await db.execute(`SELECT * FROM ${customTableName} WHERE lead_id = ? LIMIT 1`, [leadId]);
-                            if (customRows.length > 0) {
-                                const customData = customRows[0];
-                                for (const key in customData) {
-                                    if (key !== 'lead_id') {
-                                        customVars[key] = customData[key];
-                                    }
-                                }
-                            }
-                        } catch (e) {
-                            // Silently ignore if the custom table doesn't exist for this list
-                        }
+                if (pgRows.rows.length > 0) {
+                    const r = pgRows.rows[0];
+                    listId = r.list_id;
+                    campaignId = r.campaign_id || '';
+                    comments = r.comments || '';
+                    phoneNumber = r.phone_number || '';
+                    firstName = r.first_name || '';
+                    lastName = r.last_name || '';
+                    vendorLeadCode = r.vendor_lead_code || '';
+                    state = r.state || '';
+                    altPhone = r.alt_phone || '';
+
+                    if (r.tts_vars && typeof r.tts_vars === 'object') {
+                        customVars = { ...r.tts_vars };
                     }
+                    if (r.trunk_id) customVars['trunk_id'] = r.trunk_id;
                 }
 
-                // Get transfer number from campaign
                 if (campaignId) {
-                    const [campRows] = await db.execute(
-                        `SELECT xferconf_c_number FROM vicidial_campaigns WHERE campaign_id = ? LIMIT 1`,
+                    const campRows = await pg.query(
+                        `SELECT xferconf_c_number FROM gescall_campaigns WHERE campaign_id = $1 LIMIT 1`,
                         [campaignId]
                     );
-                    if (campRows.length > 0) {
-                        transferNumber = (campRows[0].xferconf_c_number || '').trim();
+                    if (campRows.rows.length > 0) {
+                        transferNumber = (campRows.rows[0].xferconf_c_number || '').trim();
                     }
                 }
+            } catch (err) {
+                console.error(`[ARI] Error resolving lead ${leadId} from PostgreSQL:`, err.message);
             }
         }
 
@@ -654,29 +589,15 @@ async function handleStasisStart(event, channel) {
         // Load IVR flow for campaign
         let flow = null;
         if (campaignId) {
-            if (isNative) {
-                const flowResult = await pg.query(
-                    `SELECT flow_json FROM gescall_ivr_flows WHERE campaign_id = $1 AND is_active = true LIMIT 1`,
-                    [campaignId]
-                );
-                if (flowResult.rows.length > 0) {
-                    try {
-                        flow = JSON.parse(flowResult.rows[0].flow_json);
-                    } catch (e) {
-                        console.error(`[ARI] Invalid flow JSON for campaign ${campaignId}`);
-                    }
-                }
-            } else if (db) {
-                const [flowRows] = await db.execute(
-                    `SELECT flow_json FROM gescall_ivr_flows WHERE campaign_id = ? AND is_active = 1 LIMIT 1`,
-                    [campaignId]
-                );
-                if (flowRows.length > 0) {
-                    try {
-                        flow = JSON.parse(flowRows[0].flow_json);
-                    } catch (e) {
-                        console.error(`[ARI] Invalid flow JSON for campaign ${campaignId}`);
-                    }
+            const flowResult = await pg.query(
+                `SELECT flow_json FROM gescall_ivr_flows WHERE campaign_id = $1 AND is_active = true LIMIT 1`,
+                [campaignId]
+            );
+            if (flowResult.rows.length > 0) {
+                try {
+                    flow = JSON.parse(flowResult.rows[0].flow_json);
+                } catch (e) {
+                    console.error(`[ARI] Invalid flow JSON for campaign ${campaignId}`);
                 }
             }
         }
@@ -701,7 +622,6 @@ async function handleStasisStart(event, channel) {
             dtmfResolve: null, // Promise resolve for DTMF collection
             startTime: Date.now(),
             executionLog: [], // Keep track of node executions for n8n style view
-            isNative, // Flag indicating if call uses PostgreSQL
             trunkId: customVars['trunk_id'] || null,
             recordingFilename, // Resolved recording filename from campaign settings
             campaignName, // Campaign name for folder structure
@@ -720,6 +640,15 @@ async function handleStasisStart(event, channel) {
         }
 
         activeCalls.set(channelId, stateObj);
+
+        try {
+            const metrics = require('./metricsService');
+            const isOutboundNative = leadId > 0 && (appArgs.includes('outbound') || String(campaignType || '').startsWith('OUTBOUND'));
+            if (isOutboundNative) {
+                if (metrics.recordOriginated) metrics.recordOriginated();
+                if (metrics.recordSuccessfulOriginate) metrics.recordSuccessfulOriginate();
+            }
+        } catch (_) { /* metrics opcional */ }
 
         // Emit live event
         if (io) {
@@ -1245,18 +1174,11 @@ async function nodeTransfer(channelId, data, callState) {
 
         // Update lead status
         if (callState.leadId > 0) {
-            if (callState.isNative) {
-                const pg = require('../config/pgDatabase');
-                await pg.query(
-                    `UPDATE gescall_leads SET status='XFER' WHERE lead_id=$1`,
-                    [callState.leadId]
-                ).catch(e => console.error('[ARI] PG Update XFER error:', e.message));
-            } else if (db) {
-                await db.execute(
-                    `UPDATE vicidial_list SET status='XFER' WHERE lead_id=?`,
-                    [callState.leadId]
-                ).catch(e => console.error('[ARI] MySQL Update XFER error:', e.message));
-            }
+            const pg = require('../config/pgDatabase');
+            await pg.query(
+                `UPDATE gescall_leads SET status='XFER' WHERE lead_id=$1`,
+                [callState.leadId]
+            ).catch(e => console.error('[ARI] PG Update XFER error:', e.message));
         }
 
         // Create a mixing bridge and add the original caller
@@ -1348,7 +1270,7 @@ async function nodeTransfer(channelId, data, callState) {
         callState.channel.once('ChannelDestroyed', origDestroyHandler);
 
         // Log transfer
-        if (db && callState.leadId > 0) {
+        if (callState.leadId > 0) {
             callState.transferredTarget = dialString;
             await logToGescall(callState, 'XFER', callState.dtmfBuffer);
         }
@@ -1393,18 +1315,11 @@ async function nodeHangup(channelId, data, callState) {
     const status = data?.status || STATUS.COMPLET;
     callState.callOutcome = IVR_OUTCOME.COMPLETED; // COMPLET
     if (callState.leadId > 0) {
-        if (callState.isNative) {
-            const pg = require('../config/pgDatabase');
-            await pg.query(
-                `UPDATE gescall_leads SET status=$1 WHERE lead_id=$2`,
-                [status, callState.leadId]
-            ).catch(e => console.error('[ARI] PG Update Hangup error:', e.message));
-        } else if (db) {
-            await db.execute(
-                `UPDATE vicidial_list SET status=? WHERE lead_id=?`,
-                [status, callState.leadId]
-            ).catch(e => console.error('[ARI] MySQL Update Hangup error:', e.message));
-        }
+        const pg = require('../config/pgDatabase');
+        await pg.query(
+            `UPDATE gescall_leads SET status=$1 WHERE lead_id=$2`,
+            [status, callState.leadId]
+        ).catch(e => console.error('[ARI] PG Update Hangup error:', e.message));
     }
 
     try {
@@ -1880,16 +1795,9 @@ async function generateTTS(text) {
     // In-memory cache for TTS nodes to avoid DB queries on every high-CPS call
     if (!global._cachedTtsNodes || Date.now() - global._cachedTtsNodesTime > 60000) {
         try {
-            const isNative = process.env.USE_GESCALL_DIALER === 'true';
-            let nodes = [];
-            if (isNative) {
-                const pg = require('../config/pgDatabase');
-                const result = await pg.query('SELECT url FROM gescall_tts_nodes WHERE is_active = true');
-                nodes = result.rows;
-            } else if (db) {
-                const [rows] = await db.execute('SELECT url FROM gescall_tts_nodes WHERE is_active = TRUE');
-                nodes = rows;
-            }
+            const pg = require('../config/pgDatabase');
+            const result = await pg.query('SELECT url FROM gescall_tts_nodes WHERE is_active = true');
+            const nodes = result.rows;
 
             if (nodes && nodes.length > 0) {
                 global._cachedTtsNodes = nodes;
@@ -2043,38 +1951,21 @@ async function logCallResult(callState) {
             const startedAt = new Date(callState.startTime).toISOString().slice(0, 19).replace('T', ' ');
 
             try {
-                if (callState.isNative) {
-                    const pg = require('../config/pgDatabase');
-                    await pg.query(`
-                        INSERT INTO gescall_ivr_executions 
-                        (campaign_id, lead_id, channel_id, started_at, finished_at, duration_ms, status, execution_data)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    `, [
-                        callState.campaignId,
-                        callState.leadId || 0,
-                        channelId || '',
-                        startedAt,
-                        finishedAt,
-                        Date.now() - callState.startTime,
-                        status,
-                        JSON.stringify(callState.executionLog)
-                    ]);
-                } else if (db) {
-                    await db.execute(`
-                        INSERT INTO gescall_ivr_executions 
-                        (campaign_id, lead_id, channel_id, started_at, finished_at, duration_ms, status, execution_data)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    `, [
-                        callState.campaignId,
-                        callState.leadId || 0,
-                        channelId || '',
-                        startedAt,
-                        finishedAt,
-                        Date.now() - callState.startTime,
-                        status,
-                        JSON.stringify(callState.executionLog)
-                    ]);
-                }
+                const pg = require('../config/pgDatabase');
+                await pg.query(`
+                    INSERT INTO gescall_ivr_executions 
+                    (campaign_id, lead_id, channel_id, started_at, finished_at, duration_ms, status, execution_data)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                `, [
+                    callState.campaignId,
+                    callState.leadId || 0,
+                    channelId || '',
+                    startedAt,
+                    finishedAt,
+                    Date.now() - callState.startTime,
+                    status,
+                    JSON.stringify(callState.executionLog)
+                ]);
                 console.log(`[ARI] Saved IVR executions to DB`);
             } catch (dbErr) {
                 console.error(`[ARI] Failed to insert executions:`, dbErr.message);
@@ -2092,137 +1983,65 @@ async function logToGescall(callState, status, dtmf, duration) {
     // Normalize raw Asterisk channel states using centralized mapping
     status = fromAsteriskState(status) !== STATUS.DROP ? fromAsteriskState(status) : status;
 
-    // Allow leadId=0 for inbound calls (they don't have a lead)
-    // Still skip negative leadIds or calls without DB access
+    // leadId=0: inbound sin lead; leadId<0: inválido
     if (callState.leadId < 0) return;
-    if (!callState.isNative && !db) return;
     duration = duration || Math.floor((Date.now() - callState.startTime) / 1000);
 
     // Determine call direction from campaign type
     const callDirection = (callState.campaignType === 'INBOUND') ? 'INBOUND' : 'OUTBOUND';
 
     try {
-        let phone = callState.phone || '';
-        let vlc = callState.vendorLeadCode || '';
-        let poolCid = callState.poolCallerid || '';
+        const phone = callState.phone || '';
 
-        // If not native, do fallback queries on MySQL
-        if (!callState.isNative) {
-            if (!phone || !vlc) {
-                const [leadRows] = await db.execute(
-                    `SELECT phone_number, vendor_lead_code FROM vicidial_list WHERE lead_id = ? LIMIT 1`,
-                    [callState.leadId]
-                );
-                if (!phone && leadRows.length > 0) phone = leadRows[0].phone_number;
-                if (!vlc && leadRows.length > 0) vlc = leadRows[0].vendor_lead_code;
-            }
+        console.log(`[ARI] Logging call: lead=${callState.leadId}, status=${status}, poolCid=${callState.poolCallerid || ''}`);
 
-            if (!poolCid) {
-                try {
-                    const [cidRows] = await db.execute(
-                        `SELECT callerid_used FROM gescall_callerid_usage_log WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1`,
-                        [callState.leadId]
-                    );
-                    if (cidRows.length > 0) poolCid = cidRows[0].callerid_used || '';
-                } catch (e) { /* table may not exist */ }
-            }
+        const pg = require('../config/pgDatabase');
+        const channelId = callState.channel?.id || '';
+        const pgUpdateResult = await pg.query(
+            `UPDATE gescall_call_log 
+             SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7), hangup_cause = $8
+             WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
+             RETURNING log_id`,
+            [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId, callState.hangupCause || null]
+        );
 
-            if (!poolCid) {
-                try {
-                    const [existRows] = await db.execute(
-                        `SELECT pool_callerid FROM gescall_call_log WHERE lead_id = ? AND pool_callerid IS NOT NULL AND pool_callerid != '' ORDER BY call_date DESC LIMIT 1`,
-                        [callState.leadId]
-                    );
-                    if (existRows.length > 0) poolCid = existRows[0].pool_callerid || '';
-                } catch (e) { /* ignore */ }
-            }
-
-            if (!poolCid) {
-                try {
-                    const [dlRows] = await db.execute(
-                        `SELECT caller_code FROM vicidial_dial_log WHERE lead_id = ? AND caller_code IS NOT NULL AND caller_code != '' ORDER BY call_date DESC LIMIT 1`,
-                        [callState.leadId]
-                    );
-                    if (dlRows.length > 0) poolCid = dlRows[0].caller_code || '';
-                } catch (e) { /* ignore */ }
-            }
+        if (pgUpdateResult.rowCount === 0) {
+            await pg.query(
+                `INSERT INTO gescall_call_log
+                 (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id, call_direction, uniqueid, hangup_cause)
+                 VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11)`,
+                [callState.leadId || 0, phone, callState.campaignId, callState.listId || 0, status, duration, dtmf || '0', callState.trunkId, callDirection, channelId, callState.hangupCause || null]
+            );
         }
 
-        console.log(`[ARI] Logging call: lead=${callState.leadId}, status=${status}, poolCid=${poolCid}, isNative=${callState.isNative}`);
+        if (callState.recordingFilename && channelId) {
+            const fs = require('fs');
+            const recPath = '/var/spool/asterisk/recording';
+            const srcFile = path.join(recPath, `${channelId}.wav`);
+            try {
+                if (fs.existsSync(srcFile)) {
+                    const now = new Date();
+                    const year = now.getFullYear().toString();
+                    const month = String(now.getMonth() + 1).padStart(2, '0');
+                    const day = String(now.getDate()).padStart(2, '0');
+                    const campaignName = callState.campaignName || callState.campaignId || 'unknown';
+                    const folderPath = path.join(recPath, year, month, day, campaignName);
 
-        if (callState.isNative) {
-            const pg = require('../config/pgDatabase');
-            const channelId = callState.channel?.id || '';
-            const pgUpdateResult = await pg.query(
-                `UPDATE gescall_call_log 
-                 SET call_status = $1, dtmf_pressed = $2, call_duration = $3, trunk_id = COALESCE(trunk_id, $4), call_direction = $6, uniqueid = COALESCE(uniqueid, $7), hangup_cause = $8
-                 WHERE lead_id = $5 AND call_status IN ('DIALING', 'IVR_START', 'FAILED', '')
-                 RETURNING log_id`,
-                [status, dtmf || '0', duration, callState.trunkId, callState.leadId, callDirection, channelId, callState.hangupCause || null]
-            );
+                    fs.mkdirSync(folderPath, { recursive: true });
 
-            if (pgUpdateResult.rowCount === 0) {
-                await pg.query(
-                    `INSERT INTO gescall_call_log
-                     (lead_id, phone_number, campaign_id, list_id, call_date, call_status, call_duration, dtmf_pressed, trunk_id, call_direction, uniqueid, hangup_cause)
-                     VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11)`,
-                    [callState.leadId || 0, phone, callState.campaignId, callState.listId || 0, status, duration, dtmf || '0', callState.trunkId, callDirection, channelId, callState.hangupCause || null]
-                );
-            }
+                    const dstFile = path.join(folderPath, `${callState.recordingFilename}.wav`);
+                    fs.renameSync(srcFile, dstFile);
 
-            // Rename recording file to campaign naming pattern
-            // Saves into: YYYY/MM/DD/campaignName/filename.wav
-            if (callState.recordingFilename && channelId) {
-                const fs = require('fs');
-                const recPath = '/var/spool/asterisk/recording';
-                const srcFile = path.join(recPath, `${channelId}.wav`);
-                try {
-                    if (fs.existsSync(srcFile)) {
-                        // Build folder hierarchy: YYYY/MM/DD/campaignName/
-                        const now = new Date();
-                        const year = now.getFullYear().toString();
-                        const month = String(now.getMonth() + 1).padStart(2, '0');
-                        const day = String(now.getDate()).padStart(2, '0');
-                        const campaignName = callState.campaignName || callState.campaignId || 'unknown';
-                        const folderPath = path.join(recPath, year, month, day, campaignName);
-                        
-                        fs.mkdirSync(folderPath, { recursive: true });
-                        
-                        const dstFile = path.join(folderPath, `${callState.recordingFilename}.wav`);
-                        fs.renameSync(srcFile, dstFile);
-                        
-                        // Store relative path from recordings root
-                        const relativePath = `${year}/${month}/${day}/${campaignName}/${callState.recordingFilename}`;
-                        console.log(`[ARI] Recording saved: ${relativePath}.wav`);
-                        
-                        await pg.query(
-                            `UPDATE gescall_call_log SET uniqueid = $1 WHERE uniqueid = $2 AND call_date >= NOW() - INTERVAL '10 minutes'`,
-                            [relativePath, channelId]
-                        );
-                    }
-                } catch (renameErr) {
-                    console.error(`[ARI] Failed to rename recording: ${renameErr.message}`);
+                    const relativePath = `${year}/${month}/${day}/${campaignName}/${callState.recordingFilename}`;
+                    console.log(`[ARI] Recording saved: ${relativePath}.wav`);
+
+                    await pg.query(
+                        `UPDATE gescall_call_log SET uniqueid = $1 WHERE uniqueid = $2 AND call_date >= NOW() - INTERVAL '10 minutes'`,
+                        [relativePath, channelId]
+                    );
                 }
-            }
-        } else {
-            // UPDATE-first: try to update existing DIALING/IVR_START record from aleatorio_callerid.agi
-            const [updateResult] = await db.execute(
-                `UPDATE gescall_call_log 
-                 SET call_status = ?, dtmf_pressed = ?, call_duration = ?, updated_at = NOW(),
-                     pool_callerid = COALESCE(NULLIF(pool_callerid, ''), ?)
-                 WHERE lead_id = ? AND call_status IN ('DIALING', 'IVR_START', '')
-                 ORDER BY call_date DESC LIMIT 1`,
-                [status, dtmf || '0', duration, poolCid, callState.leadId]
-            );
-
-            if (updateResult.affectedRows === 0) {
-                // No existing record — insert new one
-                await db.execute(
-                    `INSERT INTO gescall_call_log
-                     (lead_id, phone_number, vendor_lead_code, pool_callerid, campaign_id, list_id, call_date, call_status, dtmf_pressed, call_duration)
-                     VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
-                    [callState.leadId || 0, phone, vlc, poolCid, callState.campaignId, callState.listId || 0, status, dtmf || '0', duration]
-                );
+            } catch (renameErr) {
+                console.error(`[ARI] Failed to rename recording: ${renameErr.message}`);
             }
         }
     } catch (err) {
