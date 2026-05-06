@@ -61,7 +61,7 @@
           newid: "{{ lxc_vmid }}"
           hostname: "{{ subdomain.split('.')[0] }}"
           full: 1
-          storage: local-lvm
+          storage: data-vms
         status_code: [200, 202]
       register: clone_result
 
