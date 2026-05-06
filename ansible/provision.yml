@@ -5,6 +5,7 @@
 
 - name: Provision GesCall Client
   hosts: "{{ target_clients | default('all', true) }}"
+  connection: local
   gather_facts: no
   vars:
     proxmox_api: "https://{{ lookup('env', 'PROXMOX_HOST') }}:8006/api2/json"
@@ -19,9 +20,11 @@
         hwaddress ether {{ ovh_mac }}
 
   tasks:
-    - name: Skip provisioning when another Semaphore action was requested
+    # Solo aplica cuando provision.yml se invoca vía semaphore-deploy.yml con deploy_action=configure.
+    # Si Semaphore envía "action" vacío, |default('provision') NO sustituye y antes terminábamos el play por error.
+    - name: Skip provisioning when deploy_action is configure-only
       ansible.builtin.meta: end_play
-      when: deploy_action | default(action | default('provision')) not in ['provision', 'full']
+      when: (deploy_action | default('', true) | trim) == 'configure'
 
     - name: Validate provisioning secrets
       ansible.builtin.assert:
