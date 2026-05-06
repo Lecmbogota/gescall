@@ -115,7 +115,7 @@
         body:
           overwrite: true
           zone:
-            - name: "{{ subdomain.split('.')[0] }}"
+            - name: "{{ subdomain | regex_replace('\\.' + dns_zone + '$', '') }}"
               records:
                 - content: "{{ ovh_ip }}"
               ttl: 14400
