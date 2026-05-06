@@ -1,7 +1,6 @@
 # 🚀 GesCall - Enterprise Telephony Platform
 
-GesCall es una plataforma de telefonía autónoma de alto rendimiento (High-Performance Call Center Engine). Su arquitectura ha sido completamente desacoplada de sistemas legados (Vicidial) y reescrita para operar bajo una filosofía de **microsistemas en tiempo real (Bare-Metal / Native)**.
-
+GesCall es una plataforma de telefonía autónoma de alto rendimiento (High-Performance Call Center Engine).
 ---
 
 ## 🏛️ Arquitectura del Sistema
