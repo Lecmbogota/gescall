@@ -72,6 +72,10 @@
         path: "{{ gescall_install_dir }}/back"
         ci: yes
 
+    - name: Sync PostgreSQL password
+      ansible.builtin.shell: >
+        su - postgres -c "psql -c \"ALTER USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';\""
+
     - name: Run PostgreSQL migrations
       ansible.builtin.shell: |
         for f in $(ls migrations/*.js 2>/dev/null | sort); do
