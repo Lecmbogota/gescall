@@ -87,6 +87,8 @@
       community.general.npm:
         path: "{{ gescall_install_dir }}/front"
         ci: yes
+      environment:
+        NPM_CONFIG_LEGACY_PEER_DEPS: "true"
 
     - name: Build frontend (Vite)
       ansible.builtin.shell: npm run build
