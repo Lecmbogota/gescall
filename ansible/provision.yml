@@ -84,6 +84,11 @@
           memory: "{{ lxc_memory_mb }}"
           description: "GesCall {{ subdomain }}"
         status_code: 200
+      register: config_result
+      until: config_result.status == 200
+      retries: 15
+      delay: 10
+
 
     - name: Start the LXC
       ansible.builtin.uri:
