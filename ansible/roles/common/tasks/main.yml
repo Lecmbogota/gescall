@@ -65,10 +65,3 @@
 - name: Set timezone
   community.general.timezone:
     name: "America/Bogota"
-
-  handlers:
-    - name: Enable UFW
-      community.general.ufw:
-        state: enabled
-        policy: deny
-        direction: incoming

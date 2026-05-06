@@ -1,19 +1,11 @@
 ---
-# Role: postgresql — PostgreSQL 16 installation and database setup
+# Role: postgresql — PostgreSQL installation and database setup
 
-- name: Add PostgreSQL APT repository
-  ansible.builtin.shell: |
-    install -d /usr/share/postgresql-common/pgdg
-    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-  args:
-    creates: /etc/apt/sources.list.d/pgdg.list
-
-- name: Install PostgreSQL 16
+- name: Install PostgreSQL
   ansible.builtin.apt:
     name:
-      - postgresql-16
-      - postgresql-client-16
+      - postgresql
+      - postgresql-client
       - postgresql-contrib
     state: present
     update_cache: yes
@@ -42,21 +34,17 @@
     owner: "{{ pg_user }}"
     state: present
 
-- name: Configure PostgreSQL for network access (if needed)
+- name: Configure PostgreSQL listen addresses
   ansible.builtin.lineinfile:
-    path: /etc/postgresql/16/main/postgresql.conf
+    path: "/etc/postgresql/{{ ansible_local.postgresql_version | default('17') }}/main/postgresql.conf"
     regexp: "^#?listen_addresses"
     line: "listen_addresses = 'localhost'"
   notify: Restart PostgreSQL
+  ignore_errors: yes
 
 - name: Set PostgreSQL max connections
   ansible.builtin.lineinfile:
-    path: /etc/postgresql/16/main/postgresql.conf
+    path: "/etc/postgresql/{{ ansible_local.postgresql_version | default('17') }}/main/postgresql.conf"
     regexp: "^#?max_connections"
     line: "max_connections = 500"
-
-  handlers:
-    - name: Restart PostgreSQL
-      ansible.builtin.systemd:
-        name: postgresql
-        state: restarted
+  ignore_errors: yes

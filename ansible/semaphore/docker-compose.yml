@@ -1,0 +1,52 @@
+# Ansible Semaphore — UI para gestionar deployments
+
+services:
+  semaphore:
+    image: semaphoreui/semaphore:v2.18.1
+    container_name: semaphore
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      SEMAPHORE_DB_DIALECT: postgres
+      SEMAPHORE_DB_HOST: postgres
+      SEMAPHORE_DB_PORT: 5432
+      SEMAPHORE_DB_NAME: semaphore
+      SEMAPHORE_DB_USER: gescall_admin
+      SEMAPHORE_DB_PASS: ${PG_PASSWORD:?set PG_PASSWORD}
+      SEMAPHORE_PLAYBOOK_PATH: /etc/semaphore/playbooks
+      SEMAPHORE_ADMIN: admin
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?set SEMAPHORE_ADMIN_PASSWORD}
+      SEMAPHORE_ADMIN_NAME: Admin
+      SEMAPHORE_ADMIN_EMAIL: admin@localhost
+      SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ENCRYPTION_KEY:?set SEMAPHORE_ENCRYPTION_KEY}
+      PG_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD}
+      ARI_PASS: ${ARI_PASS:?set ARI_PASS}
+      GESCALL_REPO: ${GESCALL_REPO:-https://github.com/anomalyco/gescall.git}
+      GESCALL_VERSION: ${GESCALL_VERSION:-main}
+      PROXMOX_HOST: ${PROXMOX_HOST:-}
+      PROXMOX_USER: ${PROXMOX_USER:-}
+      PROXMOX_PASSWORD: ${PROXMOX_PASSWORD:-}
+      HOSTINGER_TOKEN: ${HOSTINGER_TOKEN:-}
+      ANSIBLE_HOST_KEY_CHECKING: "False"
+      TZ: America/Bogota
+    volumes:
+      - /opt/gescall/ansible:/etc/semaphore/playbooks:ro
+      - semaphore-data:/var/lib/semaphore
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: semaphore-db
+    restart: always
+    environment:
+      POSTGRES_DB: semaphore
+      POSTGRES_USER: gescall_admin
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD}
+    volumes:
+      - semaphore-db:/var/lib/postgresql/data
+
+volumes:
+  semaphore-data:
+  semaphore-db:

@@ -54,7 +54,7 @@ systemctl restart asterisk
 echo "[7/8] Installing Piper TTS..."
 mkdir -p /opt/piper
 curl -L -o /tmp/piper.tar.gz \
-  https://github.com/rhasspy/piper/releases/download/v2023.11.14-2/piper_linux_x86_64.tar.gz
+  https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
 tar -xzf /tmp/piper.tar.gz -C /opt/piper
 curl -L -o /opt/piper/es_ES-sharvard-medium.onnx \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx

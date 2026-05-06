@@ -4,21 +4,38 @@
 #   o  ansible-playbook -i inventory/clients.yml configure.yml  (todos los clientes)
 
 - name: Configure GesCall on LXC
-  hosts: all
-  gather_facts: yes
+  hosts: "{{ target_clients | default('all', true) }}"
+  gather_facts: no
   vars:
     ansible_host: "{{ ovh_ip }}"
     ansible_user: root
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     gescall_install_dir: /opt/gescall
+    gescall_repo_url: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/anomalyco/gescall.git', true) }}"
+    gescall_git_ref: "{{ gescall_version | default(lookup('env', 'GESCALL_VERSION') | default('main', true), true) }}"
     pg_database: gescall_db
     pg_user: gescall_admin
     pg_password: "{{ lookup('env', 'PG_PASSWORD') }}"
+    redis_port: 6379
+    ari_url: "http://127.0.0.1:8088"
+    ari_user: gescall
     ari_pass: "{{ lookup('env', 'ARI_PASS') }}"
     backend_port: 3001
     frontend_build_dir: /var/www/gescall
-    nodejs_version: 22
 
   tasks:
+    - name: Skip configuration when another Semaphore action was requested
+      ansible.builtin.meta: end_play
+      when: deploy_action | default(action | default('configure')) not in ['configure', 'full']
+
+    - name: Validate deploy secrets
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+          - ari_pass | length > 0
+        fail_msg: "PG_PASSWORD and ARI_PASS must be available in the environment."
+      no_log: true
+
     - name: Wait for SSH
       ansible.builtin.wait_for_connection:
         timeout: 60
@@ -36,9 +53,9 @@
 
     - name: Clone/update GesCall repo
       ansible.builtin.git:
-        repo: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/anomalyco/gescall.git', true) }}"
+        repo: "{{ gescall_repo_url }}"
         dest: "{{ gescall_install_dir }}"
-        version: "{{ lookup('env', 'GESCALL_VERSION') | default('main', true) }}"
+        version: "{{ gescall_git_ref }}"
         force: yes
         update: yes
 
@@ -104,4 +121,4 @@
 
     - name: Deployment complete
       ansible.builtin.debug:
-        msg: "GesCall {{ lookup('env', 'GESCALL_VERSION') | default('main', true) }} deployed on {{ subdomain }} ✓"
+        msg: "GesCall {{ gescall_git_ref }} deployed on {{ subdomain }} ✓"

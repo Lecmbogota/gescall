@@ -1,10 +1,11 @@
 ---
-# Role: nginx — Nginx reverse proxy for GesCall
+# Role: nginx — Nginx reverse proxy with SSL via Let's Encrypt
 
-- name: Install nginx
+- name: Install nginx and certbot
   ansible.builtin.apt:
     name:
       - nginx
+      - certbot
     state: present
 
 - name: Remove default nginx site
@@ -12,7 +13,7 @@
     path: /etc/nginx/sites-enabled/default
     state: absent
 
-- name: Deploy GesCall nginx config
+- name: Deploy GesCall nginx config (HTTP only first, for cert validation)
   ansible.builtin.template:
     src: gescall.conf.j2
     dest: /etc/nginx/sites-available/gescall
@@ -26,20 +27,41 @@
     state: link
   notify: Reload nginx
 
-- name: Set nginx worker connections
-  ansible.builtin.lineinfile:
-    path: /etc/nginx/nginx.conf
-    regexp: "worker_connections"
-    line: "    worker_connections 4096;"
-
 - name: Start nginx
   ansible.builtin.systemd:
     name: nginx
     state: started
     enabled: yes
 
-  handlers:
-    - name: Reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded
+- name: Flush handlers (ensure nginx is running for certbot)
+  ansible.builtin.meta: flush_handlers
+
+- name: Obtain SSL certificate via Let's Encrypt
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly --nginx --non-interactive --agree-tos
+      -d {{ subdomain }}
+      --email admin@{{ subdomain | regex_replace('^[^.]+\.', '') }}
+  register: certbot_result
+  changed_when: "'Congratulations' in certbot_result.stdout"
+  failed_when:
+    - certbot_result.rc != 0
+    - "'too many requests' not in certbot_result.stderr"
+  ignore_errors: yes
+
+- name: Deploy nginx config with SSL enabled
+  ansible.builtin.template:
+    src: gescall.conf.j2
+    dest: /etc/nginx/sites-available/gescall
+    mode: "0644"
+  vars:
+    ssl_enabled: "{{ certbot_result.rc == 0 }}"
+  notify: Reload nginx
+
+- name: Add certbot auto-renewal cron
+  ansible.builtin.cron:
+    name: "certbot renew"
+    job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+    minute: "30"
+    hour: "3"
+    user: root

@@ -1,0 +1,70 @@
+---
+# Entry point for controlled deployments from Ansible Semaphore.
+# Run this playbook on localhost and pass action/target_clients as extra vars.
+
+- name: GesCall controlled deployment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    requested_action: "{{ deploy_action | default(action | default('configure'), true) }}"
+    requested_target_clients: "{{ target_clients | default('') | trim }}"
+    requested_gescall_version: "{{ gescall_version | default(lookup('env', 'GESCALL_VERSION') | default('main', true), true) }}"
+    allow_all_clients_requested: "{{ allow_all_clients | default(false) | bool }}"
+    install_collections_requested: "{{ install_collections | default(true) | bool }}"
+    ansible_dir: "{{ playbook_dir }}"
+    required_environment: >-
+      {{
+        (['PG_PASSWORD', 'ARI_PASS'] if requested_action in ['configure', 'full'] else [])
+        +
+        (['PROXMOX_HOST', 'PROXMOX_USER', 'PROXMOX_PASSWORD', 'HOSTINGER_TOKEN'] if requested_action in ['provision', 'full'] else [])
+      }}
+
+  pre_tasks:
+    - name: Validate requested action
+      ansible.builtin.assert:
+        that:
+          - requested_action in ['configure', 'provision', 'full']
+        fail_msg: "deploy_action must be one of: configure, provision, full"
+
+    - name: Require an explicit target or all-clients confirmation
+      ansible.builtin.assert:
+        that:
+          - requested_target_clients | length > 0 or allow_all_clients_requested
+          - requested_target_clients != 'all' or allow_all_clients_requested
+        fail_msg: "Set target_clients (for example cliente01) or set allow_all_clients=true intentionally."
+
+    - name: Validate required environment variables
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item) | length > 0
+        fail_msg: "Missing required environment variable: {{ item }}"
+      loop: "{{ required_environment }}"
+      no_log: true
+
+  tasks:
+    - name: Install required Ansible collections
+      ansible.builtin.command:
+        argv:
+          - ansible-galaxy
+          - collection
+          - install
+          - -r
+          - "{{ ansible_dir }}/requirements.yml"
+      changed_when: false
+      when: install_collections_requested
+
+    - name: Show controlled deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Action: {{ requested_action }}"
+          - "Target: {{ requested_target_clients | default('all', true) }}"
+          - "Version: {{ requested_gescall_version }}"
+
+- name: Run provisioning when requested
+  ansible.builtin.import_playbook: provision.yml
+  when: deploy_action | default(action | default('configure')) in ['provision', 'full']
+
+- name: Run application configuration when requested
+  ansible.builtin.import_playbook: configure.yml
+  when: deploy_action | default(action | default('configure')) in ['configure', 'full']

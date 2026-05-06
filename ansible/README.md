@@ -90,6 +90,19 @@ GESCALL_VERSION=main PG_PASSWORD=... ARI_PASS=... \
   ansible-playbook -i ansible/inventory/clients.yml ansible/configure.yml --limit "cliente07"
 ```
 
+### Despliegue controlado con Semaphore
+
+Usar `ansible/semaphore-deploy.yml` como playbook único en Semaphore. Este playbook valida que se indique un cliente objetivo antes de ejecutar cambios.
+
+```yaml
+deploy_action: configure   # configure | provision | full
+target_clients: cliente01
+gescall_version: main
+allow_all_clients: false
+```
+
+Ver `ansible/semaphore/README.md` para la configuración completa del proyecto, inventario, environment y task template.
+
 ## GitHub Actions (automático)
 
 | Acción | Disparador | Resultado |
@@ -107,6 +120,7 @@ Los mismos 7 secretos de arriba, configurados en Settings → Secrets → Action
 |---|---|
 | `provision.yml` | Clona LXC del template en Proxmox + asigna IP OVH/MAC + crea DNS |
 | `configure.yml` | Clona repo, build, .env, migraciones, PM2 reload + health check |
+| `semaphore-deploy.yml` | Entrada segura para Semaphore con acción, cliente objetivo y validaciones |
 | `site.yml` | Legacy: instalación completa desde cero (sin template) |
 
 ## Orden de operaciones

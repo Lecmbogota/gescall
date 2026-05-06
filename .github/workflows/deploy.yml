@@ -33,6 +33,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.version || github.ref }}
 
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GESCALL_DEPLOY_SSH_KEY }}
+
       - name: Install Ansible + collections
         run: |
           sudo apt-get update -qq

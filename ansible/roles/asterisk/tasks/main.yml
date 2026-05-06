@@ -86,8 +86,3 @@
     name: asterisk
     state: started
     enabled: yes
-
-  handlers:
-    - name: Reload Asterisk
-      ansible.builtin.command: asterisk -rx 'module reload'
-      ignore_errors: yes
