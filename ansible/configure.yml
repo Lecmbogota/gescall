@@ -41,6 +41,14 @@
       ansible.builtin.wait_for_connection:
         timeout: 60
 
+    - name: Clone/update GesCall repo
+      ansible.builtin.git:
+        repo: "{{ gescall_repo_url }}"
+        dest: "{{ gescall_install_dir }}"
+        version: "{{ gescall_git_ref }}"
+        force: yes
+        update: yes
+
     - name: Create GesCall directories
       ansible.builtin.file:
         path: "{{ item }}"
@@ -51,14 +59,6 @@
         - "{{ gescall_install_dir }}/back/logs"
         - "{{ gescall_install_dir }}/dialer-go/logs"
         - "{{ frontend_build_dir }}"
-
-    - name: Clone/update GesCall repo
-      ansible.builtin.git:
-        repo: "{{ gescall_repo_url }}"
-        dest: "{{ gescall_install_dir }}"
-        version: "{{ gescall_git_ref }}"
-        force: yes
-        update: yes
 
     - name: Deploy .env from template
       ansible.builtin.template:
