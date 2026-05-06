@@ -79,6 +79,7 @@
 
     - name: Run PostgreSQL migrations
       ansible.builtin.shell: |
+        set -a; source .env; set +a
         for f in $(ls migrations/*.js 2>/dev/null | sort); do
           echo "Running migration: $f"
           node "$f"
