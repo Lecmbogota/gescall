@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -22,25 +23,41 @@ var (
 )
 
 func init() {
-	// Load .env with absolute path for PM2 compatibility
-	_ = godotenv.Load("/opt/gescall/back/.env")
+	// Load .env — try explicit env var first, then relative path, then absolute fallback
+	envFile := os.Getenv("GESCALL_ENV_FILE")
+	if envFile != "" {
+		if err := godotenv.Load(envFile); err != nil {
+			log.Printf("[Dialer] Could not load .env from GESCALL_ENV_FILE=%s: %v", envFile, err)
+		}
+		return
+	}
+
+	// Try relative path (dialer binary next to back/.env)
+	candidates := []string{
+		filepath.Join("..", "back", ".env"),
+		"/opt/gescall/back/.env",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			if err := godotenv.Load(p); err == nil {
+				return
+			}
+		}
+	}
+	log.Println("[Dialer] No .env file found; using OS environment only")
 }
 
 func main() {
 	log.Println("Starting GesCall Dialer Go...")
 
-	// Connect PostgreSQL
+	// Connect PostgreSQL — all credentials must come from environment
 	dbUser := os.Getenv("PG_USER")
 	dbPass := os.Getenv("PG_PASSWORD")
 	dbHost := os.Getenv("PG_HOST")
 	dbPort := os.Getenv("PG_PORT")
 	dbName := os.Getenv("PG_DATABASE")
-	if dbUser == "" {
-		dbUser = "gescall_admin"
-		dbPass = "TEcnologia2020"
-		dbHost = "localhost"
-		dbPort = "5432"
-		dbName = "gescall_db"
+	if dbUser == "" || dbPass == "" || dbHost == "" || dbPort == "" || dbName == "" {
+		log.Fatalf("Missing Postgres credentials. Set PG_USER, PG_PASSWORD, PG_HOST, PG_PORT, PG_DATABASE in %s/.env or environment", os.Getenv("GESCALL_ENV_FILE"))
 	}
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", dbHost, dbPort, dbUser, dbPass, dbName)
 	var err error

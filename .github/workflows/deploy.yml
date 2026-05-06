@@ -1,0 +1,67 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Git ref (branch, tag, commit)'
+        required: false
+        default: 'main'
+      limit:
+        description: 'Clients to target (hostname or group, empty = all)'
+        required: false
+        default: ''
+      provision:
+        description: 'Also provision new LXCs? (only needed for new clients)'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  tests:
+    name: Run Tests
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    name: Deploy
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version || github.ref }}
+
+      - name: Install Ansible + collections
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ansible
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Provision new LXCs (only if requested)
+        if: github.event.inputs.provision == 'true'
+        env:
+          PROXMOX_HOST: ${{ secrets.PROXMOX_HOST }}
+          PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
+          PROXMOX_PASSWORD: ${{ secrets.PROXMOX_PASSWORD }}
+          HOSTINGER_TOKEN: ${{ secrets.HOSTINGER_TOKEN }}
+        run: |
+          ansible-playbook -i ansible/inventory/clients.yml ansible/provision.yml \
+            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
+
+      - name: Configure all clients (deploy app)
+        env:
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          ARI_PASS: ${{ secrets.ARI_PASS }}
+          GESCALL_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          ansible-playbook -i ansible/inventory/clients.yml ansible/configure.yml \
+            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Ref: ${{ github.event.inputs.version || github.ref_name }}"
+          echo "Clients: ${{ github.event.inputs.limit || 'all' }}"
+          echo "Provision: ${{ github.event.inputs.provision || 'false' }}"

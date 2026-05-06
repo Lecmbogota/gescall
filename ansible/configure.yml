@@ -1,0 +1,107 @@
+---
+# Configure: desplegar GesCall en un LXC ya provisionado
+# Uso: ansible-playbook -i inventory/clients.yml configure.yml --limit "cliente01"
+#   o  ansible-playbook -i inventory/clients.yml configure.yml  (todos los clientes)
+
+- name: Configure GesCall on LXC
+  hosts: all
+  gather_facts: yes
+  vars:
+    ansible_host: "{{ ovh_ip }}"
+    ansible_user: root
+    gescall_install_dir: /opt/gescall
+    pg_database: gescall_db
+    pg_user: gescall_admin
+    pg_password: "{{ lookup('env', 'PG_PASSWORD') }}"
+    ari_pass: "{{ lookup('env', 'ARI_PASS') }}"
+    backend_port: 3001
+    frontend_build_dir: /var/www/gescall
+    nodejs_version: 22
+
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 60
+
+    - name: Create GesCall directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ gescall_install_dir }}"
+        - "{{ gescall_install_dir }}/back/logs"
+        - "{{ gescall_install_dir }}/dialer-go/logs"
+        - "{{ frontend_build_dir }}"
+
+    - name: Clone/update GesCall repo
+      ansible.builtin.git:
+        repo: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/anomalyco/gescall.git', true) }}"
+        dest: "{{ gescall_install_dir }}"
+        version: "{{ lookup('env', 'GESCALL_VERSION') | default('main', true) }}"
+        force: yes
+        update: yes
+
+    - name: Deploy .env from template
+      ansible.builtin.template:
+        src: roles/gescall/templates/env.j2
+        dest: "{{ gescall_install_dir }}/back/.env"
+        mode: "0600"
+      no_log: true
+
+    - name: Install backend npm dependencies
+      community.general.npm:
+        path: "{{ gescall_install_dir }}/back"
+        ci: yes
+
+    - name: Run PostgreSQL migrations
+      ansible.builtin.shell: |
+        for f in $(ls migrations/*.js 2>/dev/null | sort); do
+          echo "Running migration: $f"
+          node "$f"
+        done
+      args:
+        chdir: "{{ gescall_install_dir }}/back"
+      register: migrations
+      failed_when: false
+
+    - name: Install frontend npm dependencies
+      community.general.npm:
+        path: "{{ gescall_install_dir }}/front"
+        ci: yes
+
+    - name: Build frontend (Vite)
+      ansible.builtin.shell: npm run build
+      args:
+        chdir: "{{ gescall_install_dir }}/front"
+      environment:
+        NODE_ENV: production
+
+    - name: Build Go dialer
+      ansible.builtin.shell: go build -o gescall-dialer .
+      args:
+        chdir: "{{ gescall_install_dir }}/dialer-go"
+
+    - name: Start/reload PM2 processes
+      ansible.builtin.shell: |
+        pm2 startOrReload {{ gescall_install_dir }}/ecosystem.config.js --update-env
+        pm2 save
+      args:
+        chdir: "{{ gescall_install_dir }}"
+
+    - name: Configure PM2 auto-start
+      ansible.builtin.shell: pm2 startup systemd -u root --hp /root
+      ignore_errors: yes
+
+    - name: Verify backend health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ backend_port }}/health"
+        return_content: yes
+      register: health
+      retries: 10
+      delay: 2
+      until: health.json.status == 'ok'
+
+    - name: Deployment complete
+      ansible.builtin.debug:
+        msg: "GesCall {{ lookup('env', 'GESCALL_VERSION') | default('main', true) }} deployed on {{ subdomain }} ✓"

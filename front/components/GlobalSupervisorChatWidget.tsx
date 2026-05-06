@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../services/api';
 import socketService from '../services/socket';
 import { playChatNotificationTone } from '../utils/chatSound';
+import { toast } from 'sonner';
 
 type ChatMessageRow = {
   id: number;
@@ -82,6 +83,7 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
   const panelRef = useRef<HTMLDivElement | null>(null);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const chipsScrollRef = useRef<HTMLDivElement | null>(null);
   const chipsDraggingRef = useRef(false);
   const chipsStartXRef = useRef(0);
@@ -337,6 +339,43 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
     });
   }, [chatFilter, contacts, searchQuery, selectedCampaignId, unreadByThread]);
 
+  const trimmedSearch = searchQuery.trim();
+  const composeSuggestion = useMemo(() => {
+    if (!selectedCampaignId || trimmedSearch.length < 2) return null;
+    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmedSearch)) return null;
+    if (contacts.some((c) => c.username.toLowerCase() === trimmedSearch.toLowerCase())) return null;
+    return trimmedSearch;
+  }, [contacts, selectedCampaignId, trimmedSearch]);
+
+  const openChatWithAgent = useCallback(
+    async (agentUser: string) => {
+      const u = String(agentUser || '').trim();
+      if (!u || !selectedCampaignId) return;
+      setSearchQuery('');
+      setChatFilter('all');
+      setContacts((prev) => {
+        if (prev.some((c) => c.username.toLowerCase() === u.toLowerCase())) return prev;
+        return [...prev, { username: u, lastMessage: '', lastAt: null }];
+      });
+      try {
+        const msgRes: any = await api.listAgentWorkspaceChatMessages({
+          campaign_id: selectedCampaignId,
+          agent_username: u,
+        });
+        const messages: ChatMessageRow[] =
+          msgRes?.success && Array.isArray(msgRes.data) ? msgRes.data : [];
+        const k = threadKey(selectedCampaignId, u);
+        setThreads((prev) => ({ ...prev, [k]: messages }));
+        recomputeUnreadForThread(selectedCampaignId, u, messages, false);
+      } catch {
+        toast.error('No se pudo cargar el historial del chat');
+      }
+      setSelectedAgentUsername(u);
+      if (!isExpanded) setIsConversationView(true);
+    },
+    [selectedCampaignId, isExpanded]
+  );
+
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     const body = draft.trim();
@@ -350,7 +389,30 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
       });
       if (res?.success && res.data) {
         setDraft('');
+        const row = res.data as ChatMessageRow;
+        const k = threadKey(selectedCampaignId, selectedAgentUsername);
+        setThreads((prev) => {
+          const old = prev[k] || [];
+          if (old.some((m) => m.id === row.id)) return prev;
+          return { ...prev, [k]: [...old, row] };
+        });
+        setContacts((prev) => {
+          const ix = prev.findIndex((c) => c.username === selectedAgentUsername);
+          if (ix === -1) return prev;
+          const copy = [...prev];
+          const [picked] = copy.splice(ix, 1);
+          return [
+            {
+              ...picked,
+              lastMessage: row.body,
+              lastAt: row.created_at,
+            },
+            ...copy,
+          ];
+        });
       }
+    } catch (err: any) {
+      toast.error(err?.message || 'No se pudo enviar el mensaje');
     } finally {
       setSending(false);
     }
@@ -393,7 +455,17 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
                       </svg>
                     )}
                   </button>
-                  <button type="button" className="w-9 h-9 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors" title="Nuevo chat">
+                  <button
+                    type="button"
+                    className="w-9 h-9 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors"
+                    title="Nuevo chat: escribe el usuario del agente en el buscador y elige «Iniciar conversación»"
+                    onClick={() => {
+                      setIsConversationView(false);
+                      setChatFilter('all');
+                      setSearchQuery('');
+                      window.setTimeout(() => searchInputRef.current?.focus(), 0);
+                    }}
+                  >
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 5v14" />
                       <path d="M5 12h14" />
@@ -414,9 +486,16 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
                   <path d="m21 21-4.3-4.3" />
                 </svg>
                 <input
+                  ref={searchInputRef}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar un chat o iniciar uno nuevo"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && composeSuggestion) {
+                      e.preventDefault();
+                      void openChatWithAgent(composeSuggestion);
+                    }
+                  }}
+                  placeholder="Buscar agente o escribir usuario para nuevo chat"
                   className="w-full bg-transparent text-[14px] text-[#e9edef] placeholder:text-[#8696a0] outline-none"
                 />
               </div>
@@ -506,6 +585,21 @@ export function GlobalSupervisorChatWidget({ username, enabled }: GlobalSupervis
               </div>
             </div>
             <div className="flex-1 overflow-y-auto bg-[#111b21]">
+              {composeSuggestion && (
+                <div className="px-3 pt-2 pb-1 border-b border-white/5">
+                  <button
+                    type="button"
+                    onClick={() => void openChatWithAgent(composeSuggestion)}
+                    className="w-full text-left rounded-xl bg-[#005c4b]/30 hover:bg-[#005c4b]/45 border border-[#00a884]/40 px-3 py-2.5 transition-colors"
+                  >
+                    <p className="text-[12px] font-semibold text-[#d9fdd3]">Nueva conversación</p>
+                    <p className="text-[13px] text-[#e9edef] mt-0.5">
+                      Chatear con <span className="font-mono font-semibold">{composeSuggestion}</span>
+                    </p>
+                    <p className="text-[11px] text-[#8696a0] mt-1">Usuario no está en la lista de la campaña; se abrirá el hilo igualmente.</p>
+                  </button>
+                </div>
+              )}
               {loading ? (
                 <div className="p-4 space-y-3">
                   {[1, 2, 3, 4].map((i) => (

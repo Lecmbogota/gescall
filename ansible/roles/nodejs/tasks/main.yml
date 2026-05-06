@@ -1,0 +1,58 @@
+---
+# Role: nodejs — Node.js 22, PM2, and app dependencies
+
+- name: Add NodeSource GPG key
+  ansible.builtin.apt_key:
+    url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+    state: present
+
+- name: Add NodeSource APT repository (Node 22)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main"
+    state: present
+    filename: nodesource
+    update_cache: yes
+
+- name: Install Node.js and npm
+  ansible.builtin.apt:
+    name:
+      - nodejs
+    state: present
+
+- name: Install PM2 globally
+  community.general.npm:
+    name: pm2
+    global: yes
+    state: present
+
+- name: Create GesCall directories
+  ansible.builtin.file:
+    path: "{{ gescall_install_dir }}"
+    state: directory
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0755"
+
+- name: Create backend logs directory
+  ansible.builtin.file:
+    path: "{{ gescall_install_dir }}/back/logs"
+    state: directory
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0755"
+
+- name: Create dialer logs directory
+  ansible.builtin.file:
+    path: "{{ gescall_install_dir }}/dialer-go/logs"
+    state: directory
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0755"
+
+- name: Create frontend build directory
+  ansible.builtin.file:
+    path: "{{ frontend_build_dir }}"
+    state: directory
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0755"

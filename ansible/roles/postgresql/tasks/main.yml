@@ -1,0 +1,62 @@
+---
+# Role: postgresql — PostgreSQL 16 installation and database setup
+
+- name: Add PostgreSQL APT repository
+  ansible.builtin.shell: |
+    install -d /usr/share/postgresql-common/pgdg
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+  args:
+    creates: /etc/apt/sources.list.d/pgdg.list
+
+- name: Install PostgreSQL 16
+  ansible.builtin.apt:
+    name:
+      - postgresql-16
+      - postgresql-client-16
+      - postgresql-contrib
+    state: present
+    update_cache: yes
+
+- name: Ensure PostgreSQL is running
+  ansible.builtin.systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Create gescall database user
+  become: yes
+  become_user: postgres
+  postgresql_user:
+    name: "{{ pg_user }}"
+    password: "{{ pg_password }}"
+    role_attr_flags: CREATEDB,SUPERUSER
+    state: present
+  no_log: true
+
+- name: Create gescall database
+  become: yes
+  become_user: postgres
+  postgresql_db:
+    name: "{{ pg_database }}"
+    owner: "{{ pg_user }}"
+    state: present
+
+- name: Configure PostgreSQL for network access (if needed)
+  ansible.builtin.lineinfile:
+    path: /etc/postgresql/16/main/postgresql.conf
+    regexp: "^#?listen_addresses"
+    line: "listen_addresses = 'localhost'"
+  notify: Restart PostgreSQL
+
+- name: Set PostgreSQL max connections
+  ansible.builtin.lineinfile:
+    path: /etc/postgresql/16/main/postgresql.conf
+    regexp: "^#?max_connections"
+    line: "max_connections = 500"
+
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted

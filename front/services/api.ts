@@ -497,6 +497,14 @@ class ApiService {
     return this.request('/agent-workspace/dashboard');
   }
 
+  async getAgentWorkspaceRecentCalls(params?: { days?: number; limit?: number }) {
+    const qs = new URLSearchParams();
+    if (params?.days != null) qs.set('days', String(params.days));
+    if (params?.limit != null) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return this.request(`/agent-workspace/recent-calls${q ? `?${q}` : ''}`);
+  }
+
   async dismissAgentWorkspaceNotice(noticeId: number) {
     return this.post(`/agent-workspace/notices/${noticeId}/dismiss`, {});
   }

@@ -9,6 +9,7 @@ import { useWebPhone } from '../hooks/useWebPhone';
 import { FloatingTeleprompter } from './FloatingTeleprompter';
 import AnimatedList from './AnimatedList';
 import api from '../services/api';
+import { getDetailDisplayStatus } from '../utils/callStatusUtils';
 import corporateHeaderBg from '../assets/corporate_header_bg.png';
 import { playChatNotificationTone } from '../utils/chatSound';
 import { toast } from 'sonner';
@@ -98,6 +99,24 @@ const DEFAULT_PAUSE_CONFIG: Record<string, { label: string; limit: number; icon?
   'not_ready_backoffice': { label: 'Pausa - Backoffice', limit: 900, icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' },
   'not_ready_capacitacion': { label: 'Pausa - Capacitación', limit: 3600, icon: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' },
 };
+
+function formatRecentCallTimeLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startThat = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startToday.getTime() - startThat.getTime()) / 86400000);
+  if (diffDays === 0) {
+    return d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  if (diffDays === 1) return 'Ayer';
+  if (diffDays > 1 && diffDays < 7) {
+    const w = d.toLocaleDateString('es', { weekday: 'long' });
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }
+  return d.toLocaleDateString('es', { day: 'numeric', month: 'short' });
+}
 
 function normalizePauseConfig(raw?: any) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -407,6 +426,20 @@ export const AgentWorkspace: React.FC = () => {
   const [chatDraft, setChatDraft] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [activeApp, setActiveApp] = useState<'home' | 'estado' | 'telefono' | 'historial' | 'chat'>('home');
+  const [recentCalls, setRecentCalls] = useState<
+    Array<{
+      log_id: number;
+      phone_number: string;
+      call_date: string;
+      call_status?: string;
+      dtmf_pressed?: string;
+      lead_status?: string;
+      typification_name?: string | null;
+      call_direction?: string;
+      display_name?: string | null;
+    }>
+  >([]);
+  const [recentCallsLoading, setRecentCallsLoading] = useState(false);
   const [chatLastReadSupId, setChatLastReadSupId] = React.useState(0);
   const chatScrollRef = React.useRef<HTMLDivElement | null>(null);
   const [isSupervisorOnline, setIsSupervisorOnline] = useState(false);
@@ -428,6 +461,31 @@ export const AgentWorkspace: React.FC = () => {
   React.useEffect(() => {
     reloadWorkspaceDashboard();
   }, [agentUsername, reloadWorkspaceDashboard]);
+
+  React.useEffect(() => {
+    if (activeApp !== 'historial') return;
+    let cancelled = false;
+    setRecentCallsLoading(true);
+    api
+      .getAgentWorkspaceRecentCalls({ days: 30, limit: 80 })
+      .then((res: any) => {
+        if (cancelled) return;
+        if (res?.success && Array.isArray(res.data)) setRecentCalls(res.data);
+        else setRecentCalls([]);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRecentCalls([]);
+          toast.error('No se pudo cargar el historial');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRecentCallsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeApp]);
 
   React.useEffect(() => {
     socketService.connect();
@@ -2126,21 +2184,69 @@ export const AgentWorkspace: React.FC = () => {
                     <h2 className="text-[17px] font-semibold text-black mx-auto">Recientes</h2>
                   </div>
                   <div className="flex-1 overflow-y-auto px-4 py-2 custom-scrollbar">
-                    {/* Dummy History Items */}
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
-                        <div className="flex flex-col">
-                          <span className={`text-[17px] font-medium ${i % 2 === 0 ? 'text-red-500' : 'text-black'}`}>
-                            {i % 2 === 0 ? '+52 55 1234 5678' : 'Carlos Mendoza'}
-                          </span>
-                          <span className="text-[13px] text-slate-500">Móvil</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-slate-400">
-                          <span className="text-[15px]">{i === 1 ? '10:45' : i === 2 ? 'Ayer' : 'Lunes'}</span>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#007aff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                        </div>
+                    {recentCallsLoading ? (
+                      <div className="py-10 text-center text-[15px] text-slate-400">Cargando historial…</div>
+                    ) : recentCalls.length === 0 ? (
+                      <div className="py-10 px-2 text-center text-[14px] text-slate-500 leading-relaxed">
+                        No hay llamadas recientes asociadas a tu usuario (tipificaciones o transferencias en tus campañas en
+                        los últimos 30 días).
                       </div>
-                    ))}
+                    ) : (
+                      recentCalls.map((row) => {
+                        const title =
+                          (row.display_name && String(row.display_name).trim()) ||
+                          (row.phone_number && String(row.phone_number).trim()) ||
+                          '—';
+                        const sub =
+                          row.typification_name?.trim() ||
+                          (row.call_direction === 'INBOUND' ? 'Entrante' : 'Saliente');
+                        const disp = getDetailDisplayStatus(
+                          row.call_status,
+                          row.dtmf_pressed || '0',
+                          row.lead_status,
+                          row.typification_name || undefined
+                        );
+                        const accentRed =
+                          disp.color.includes('red') ||
+                          disp.color.includes('orange') ||
+                          disp.color.includes('yellow');
+                        return (
+                          <div
+                            key={row.log_id}
+                            className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0"
+                          >
+                            <div className="flex flex-col min-w-0 pr-2">
+                              <span
+                                className={`text-[17px] font-medium truncate ${accentRed ? 'text-red-500' : 'text-black'}`}
+                              >
+                                {title}
+                              </span>
+                              <span className="text-[13px] text-slate-500 truncate">{sub}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-slate-400 shrink-0">
+                              <span className="text-[15px]">{formatRecentCallTimeLabel(row.call_date)}</span>
+                              <span title={disp.description}>
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="22"
+                                  height="22"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="#007aff"
+                                  strokeWidth="1.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <circle cx="12" cy="12" r="10" />
+                                  <line x1="12" y1="16" x2="12" y2="12" />
+                                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                                </svg>
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               ) : activeApp === 'chat' ? (

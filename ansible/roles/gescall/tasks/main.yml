@@ -1,0 +1,120 @@
+---
+# Role: gescall — Application deployment (backend, frontend, dialer, PM2)
+
+- name: Clone/update GesCall repository
+  ansible.builtin.git:
+    repo: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/anomalyco/gescall.git', true) }}"
+    dest: "{{ gescall_install_dir }}"
+    version: "{{ lookup('env', 'GESCALL_VERSION') | default('main', true) }}"
+    force: yes
+    update: yes
+  become: yes
+  become_user: gescall-deploy
+
+- name: Deploy backend .env from template
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ gescall_install_dir }}/back/.env"
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0600"
+  no_log: true
+
+- name: Install backend npm dependencies
+  community.general.npm:
+    path: "{{ gescall_install_dir }}/back"
+    ci: yes
+  become: yes
+  become_user: gescall-deploy
+
+- name: Run PostgreSQL migrations (JS)
+  ansible.builtin.shell: |
+    for f in $(ls migrations/*.js 2>/dev/null | sort); do
+      echo "Running migration: $f"
+      node "$f"
+    done
+  args:
+    chdir: "{{ gescall_install_dir }}/back"
+  become: yes
+  become_user: gescall-deploy
+  register: migrations_result
+  failed_when: false
+
+- name: Load database schema (first deploy only)
+  ansible.builtin.shell: |
+    PGPASSWORD={{ pg_password }} psql -h 127.0.0.1 -U {{ pg_user }} -d {{ pg_database }} -f database_schemas/gescall_db_schema.sql
+  args:
+    chdir: "{{ gescall_install_dir }}"
+  become: yes
+  become_user: gescall-deploy
+  when: migrations_result.stdout == ''
+  ignore_errors: yes
+  no_log: true
+
+- name: Install frontend npm dependencies
+  community.general.npm:
+    path: "{{ gescall_install_dir }}/front"
+    ci: yes
+  become: yes
+  become_user: gescall-deploy
+
+- name: Build frontend (Vite → /var/www/gescall)
+  ansible.builtin.shell: npm run build
+  args:
+    chdir: "{{ gescall_install_dir }}/front"
+  become: yes
+  become_user: gescall-deploy
+  environment:
+    NODE_ENV: production
+
+- name: Install Go
+  ansible.builtin.apt:
+    name:
+      - golang-go
+    state: present
+
+- name: Build Go dialer
+  ansible.builtin.shell: go build -o gescall-dialer .
+  args:
+    chdir: "{{ gescall_install_dir }}/dialer-go"
+  become: yes
+  become_user: gescall-deploy
+  environment:
+    GOPATH: /home/gescall-deploy/go
+    GOMODCACHE: /home/gescall-deploy/go/pkg/mod
+
+- name: Copy ecosystem.config.js for PM2
+  ansible.builtin.copy:
+    src: "{{ gescall_install_dir }}/ecosystem.config.js"
+    dest: "{{ gescall_install_dir }}/ecosystem.config.js"
+    remote_src: yes
+    owner: gescall-deploy
+    group: gescall-deploy
+    mode: "0644"
+
+- name: Start/reload PM2 processes
+  ansible.builtin.shell: |
+    pm2 startOrReload {{ gescall_install_dir }}/ecosystem.config.js --update-env
+    pm2 save
+  args:
+    chdir: "{{ gescall_install_dir }}"
+  become: yes
+  become_user: gescall-deploy
+
+- name: Configure PM2 to start on boot
+  ansible.builtin.shell: pm2 startup systemd -u gescall-deploy --hp /home/gescall-deploy
+  become: yes
+  ignore_errors: yes
+
+- name: Verify backend is running
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ backend_port }}/health"
+    return_content: yes
+  register: health
+  retries: 10
+  delay: 2
+  until: health.json.status == 'ok'
+
+- name: Deployment complete
+  ansible.builtin.debug:
+    msg: "GesCall deployed successfully on {{ subdomain }} ({{ ansible_host }})"

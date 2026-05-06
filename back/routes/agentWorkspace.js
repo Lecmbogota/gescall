@@ -240,6 +240,96 @@ router.get('/dashboard', async (req, res) => {
     }
 });
 
+function leadDisplayNameFromTts(ttsVars) {
+    if (ttsVars == null) return null;
+    let o = ttsVars;
+    if (typeof ttsVars === 'string') {
+        try {
+            o = JSON.parse(ttsVars);
+        } catch {
+            return null;
+        }
+    }
+    if (typeof o !== 'object' || !o) return null;
+    const keys = ['nombre', 'NOMBRE', 'name', 'first_name', 'nombres', 'contacto'];
+    for (const k of keys) {
+        const v = o[k];
+        if (v != null && typeof v !== 'object' && String(v).trim()) return String(v).trim();
+    }
+    return null;
+}
+
+/**
+ * GET /api/agent-workspace/recent-calls
+ * Llamadas recientes asociadas al agente (tipificación o transferencia) en sus campañas.
+ * Query: days (1–90, default 30), limit (1–200, default 50)
+ */
+router.get('/recent-calls', async (req, res) => {
+    try {
+        const username = String(req.user.username || '').trim();
+        if (!username) {
+            return res.status(400).json({ success: false, error: 'Usuario sin nombre' });
+        }
+        const days = Math.min(90, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
+        const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+
+        const campaigns = await getCampaignScopeForUser(req);
+        if (!campaigns.length) {
+            return res.json({ success: true, data: [] });
+        }
+
+        const { rows } = await pg.query(
+            `SELECT
+                cl.log_id,
+                cl.phone_number,
+                cl.call_date,
+                cl.call_status,
+                cl.dtmf_pressed,
+                l.status AS lead_status,
+                l.tts_vars,
+                COALESCE(cl.call_direction, 'OUTBOUND') AS call_direction,
+                (
+                    SELECT t.name
+                    FROM gescall_typification_results trx
+                    LEFT JOIN gescall_typifications t ON t.id = trx.typification_id
+                    WHERE trx.call_log_id = cl.log_id
+                    ORDER BY trx.created_at DESC NULLS LAST
+                    LIMIT 1
+                ) AS typification_name
+             FROM gescall_call_log cl
+             LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id AND cl.lead_id > 0
+             WHERE cl.campaign_id = ANY($1::varchar[])
+               AND cl.call_date >= NOW() - ($2::int * INTERVAL '1 day')
+               AND (
+                 EXISTS (
+                   SELECT 1 FROM gescall_typification_results tr2
+                   WHERE tr2.call_log_id = cl.log_id
+                     AND tr2.agent_username IS NOT NULL
+                     AND LOWER(TRIM(tr2.agent_username)) = LOWER($3)
+                 )
+                 OR (
+                   cl.transferred_to IS NOT NULL
+                   AND TRIM(cl.transferred_to) <> ''
+                   AND LOWER(TRIM(cl.transferred_to)) = LOWER($3)
+                 )
+               )
+             ORDER BY cl.call_date DESC
+             LIMIT $4`,
+            [campaigns, days, username, limit]
+        );
+
+        const data = rows.map((r) => ({
+            ...r,
+            display_name: leadDisplayNameFromTts(r.tts_vars),
+        }));
+
+        res.json({ success: true, data });
+    } catch (e) {
+        console.error('[agent-workspace] recent-calls:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 /**
  * POST /api/agent-workspace/verify-pause-pin
  * body: { pin: string }

@@ -1,0 +1,72 @@
+---
+# Role: piper — Piper TTS engine download and setup
+
+- name: Create Piper directory
+  ansible.builtin.file:
+    path: /opt/piper
+    state: directory
+    mode: "0755"
+
+- name: Download Piper binary
+  ansible.builtin.get_url:
+    url: "https://github.com/rhasspy/piper/releases/download/{{ piper_version }}/piper_linux_x86_64.tar.gz"
+    dest: /tmp/piper.tar.gz
+    mode: "0644"
+
+- name: Extract Piper binary
+  ansible.builtin.unarchive:
+    src: /tmp/piper.tar.gz
+    dest: /opt/piper
+    remote_src: yes
+    creates: /opt/piper/piper
+
+- name: Make Piper executable
+  ansible.builtin.file:
+    path: /opt/piper/piper
+    mode: "0755"
+
+- name: Download Spanish voice model
+  ansible.builtin.get_url:
+    url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/sharvard/medium/{{ piper_voice }}.onnx"
+    dest: "/opt/piper/{{ piper_voice }}.onnx"
+    mode: "0644"
+
+- name: Download voice model config
+  ansible.builtin.get_url:
+    url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/sharvard/medium/{{ piper_voice }}.onnx.json"
+    dest: "/opt/piper/{{ piper_voice }}.onnx.json"
+    mode: "0644"
+
+- name: Create Piper TTS wrapper script
+  ansible.builtin.copy:
+    content: |
+      #!/bin/bash
+      echo "$1" | /opt/piper/piper -m /opt/piper/{{ piper_voice }}.onnx -f "$2"
+    dest: /usr/local/bin/piper-tts
+    mode: "0755"
+
+- name: Create Piper HTTP service (systemd)
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Piper TTS HTTP Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 -m http.server 5000 --directory /var/lib/asterisk/sounds/tts/piper
+      WorkingDirectory=/var/lib/asterisk/sounds/tts/piper
+      Restart=always
+      User=asterisk
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/piper-tts.service
+    mode: "0644"
+
+- name: Enable and start Piper TTS service
+  ansible.builtin.systemd:
+    name: piper-tts
+    daemon_reload: yes
+    state: started
+    enabled: yes

@@ -1,0 +1,112 @@
+---
+# Provision: crear LXC en Proxmox + DNS en Hostinger
+# Uso: ansible-playbook -i inventory/clients.yml provision.yml --limit "cliente01"
+# Requiere variables de entorno: PROXMOX_TOKEN, PROXMOX_HOST, HOSTINGER_TOKEN
+
+- name: Provision GesCall Client
+  hosts: all
+  gather_facts: no
+  vars:
+    proxmox_api: "https://{{ lookup('env', 'PROXMOX_HOST') }}:8006/api2/json"
+    proxmox_token: "{{ lookup('env', 'PROXMOX_TOKEN') }}"
+    hostinger_token: "{{ lookup('env', 'HOSTINGER_TOKEN') }}"
+    # Template LXC network config (OVH failover IP)
+    lxc_net_config: |
+      auto eth0
+      iface eth0 inet static
+        address {{ ovh_ip }}/32
+        gateway {{ ovh_gateway }}
+        hwaddress ether {{ ovh_mac }}
+
+  tasks:
+    - name: Step 1/4 — Login to Proxmox API
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/access/ticket"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          username: "{{ lookup('env', 'PROXMOX_USER') }}"
+          password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
+      register: proxmox_auth
+      no_log: true
+
+    - name: Step 2/4 — Clone LXC from golden template
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/lxc/{{ proxmox_template_id }}/clone"
+        method: POST
+        headers:
+          CSRFPreventionToken: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+          Cookie: "PVEAuthCookie={{ proxmox_auth.json.data.ticket }}"
+        body_format: form-urlencoded
+        body:
+          newid: "{{ lxc_vmid }}"
+          hostname: "{{ subdomain.split('.')[0] }}"
+          full: 1
+          storage: local-lvm
+        status_code: [200, 202]
+      register: clone_result
+
+    - name: Wait for LXC clone to complete
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Configure LXC network (OVH IP + MAC)
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/lxc/{{ lxc_vmid }}/config"
+        method: PUT
+        headers:
+          CSRFPreventionToken: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+          Cookie: "PVEAuthCookie={{ proxmox_auth.json.data.ticket }}"
+        body_format: form-urlencoded
+        body:
+          net0: "name=eth0,bridge=vmbr0,hwaddr={{ ovh_mac }},ip=dhcp"
+          cores: "{{ lxc_cores }}"
+          memory: "{{ lxc_memory_mb }}"
+          description: "GesCall {{ subdomain }}"
+        status_code: 200
+
+    - name: Start the LXC
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/lxc/{{ lxc_vmid }}/status/start"
+        method: POST
+        headers:
+          CSRFPreventionToken: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+          Cookie: "PVEAuthCookie={{ proxmox_auth.json.data.ticket }}"
+        status_code: [200, 202]
+
+    - name: Wait for LXC to boot
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Step 3/4 — Create DNS A record in Hostinger
+      ansible.builtin.uri:
+        url: "https://api.hostinger.com/api/domains/v1/{{ dns_zone }}/dns/records"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ hostinger_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ subdomain.split('.')[0] }}"
+          type: A
+          content: "{{ ovh_ip }}"
+          ttl: 3600
+      register: dns_result
+      ignore_errors: yes
+
+    - name: Step 4/4 — Wait for LXC SSH to be ready
+      ansible.builtin.wait_for:
+        host: "{{ ovh_ip }}"
+        port: 22
+        timeout: 120
+        state: started
+
+    - name: Provisioning complete
+      ansible.builtin.debug:
+        msg:
+          - "Cliente {{ inventory_hostname }} provisionado correctamente"
+          - "  LXC VMID: {{ lxc_vmid }}"
+          - "  IP: {{ ovh_ip }}"
+          - "  MAC: {{ ovh_mac }}"
+          - "  Subdomain: {{ subdomain }}"
+          - "  Next: run configure.yml --limit {{ inventory_hostname }}"

@@ -1,0 +1,74 @@
+---
+# Role: common — OS setup, dependencies, firewall
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install base system packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - git
+      - python3
+      - python3-pip
+      - python3-psycopg2
+      - build-essential
+      - ffmpeg
+      - sox
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - ufw
+      - htop
+      - vim
+      - unzip
+    state: present
+
+- name: Create gescall-deploy user
+  ansible.builtin.user:
+    name: gescall-deploy
+    shell: /bin/bash
+    groups: sudo
+    append: yes
+    create_home: yes
+    state: present
+
+- name: Add SSH authorized key for deploy user
+  ansible.posix.authorized_key:
+    user: gescall-deploy
+    key: "{{ lookup('file', '~/.ssh/gescall_deploy.pub') | default(omit) }}"
+    state: present
+  ignore_errors: yes
+
+- name: Allow sudo without password for deploy user
+  ansible.builtin.copy:
+    content: "gescall-deploy ALL=(ALL) NOPASSWD:ALL\n"
+    dest: /etc/sudoers.d/gescall-deploy
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: Configure firewall (UFW)
+  community.general.ufw:
+    rule: "{{ item.rule }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto | default('tcp') }}"
+  loop:
+    - { rule: allow, port: "22" }
+    - { rule: allow, port: "80" }
+    - { rule: allow, port: "443" }
+    - { rule: allow, port: "8081" }
+  notify: Enable UFW
+
+- name: Set timezone
+  community.general.timezone:
+    name: "America/Bogota"
+
+  handlers:
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming

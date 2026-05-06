@@ -1,0 +1,32 @@
+---
+# GesCall Production Deploy Playbook
+# Run: ansible-playbook -i inventory/production.yml site.yml --limit "cliente01"
+# Full deploy: ansible-playbook -i inventory/production.yml site.yml
+
+- name: GesCall Full Stack Deployment
+  hosts: production
+  become: yes
+  vars:
+    nodejs_version: 22
+    piper_version: v2023.11.14-2
+    piper_voice: es_ES-sharvard-medium
+    # Secrets — override via ansible-vault or CI secrets
+    pg_password: "{{ lookup('env', 'PG_PASSWORD') | default('changeme', true) }}"
+    ari_pass: "{{ lookup('env', 'ARI_PASS') | default('changeme', true) }}"
+    redis_password: ""
+
+  pre_tasks:
+    - name: Wait for server to be reachable
+      ansible.builtin.wait_for_connection:
+        timeout: 60
+
+  roles:
+    - common
+    - postgresql
+    - redis
+    - clickhouse
+    - asterisk
+    - piper
+    - nodejs
+    - nginx
+    - gescall

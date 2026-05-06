@@ -1,0 +1,45 @@
+---
+# Role: nginx — Nginx reverse proxy for GesCall
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name:
+      - nginx
+    state: present
+
+- name: Remove default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Deploy GesCall nginx config
+  ansible.builtin.template:
+    src: gescall.conf.j2
+    dest: /etc/nginx/sites-available/gescall
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable GesCall site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/gescall
+    dest: /etc/nginx/sites-enabled/gescall
+    state: link
+  notify: Reload nginx
+
+- name: Set nginx worker connections
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: "worker_connections"
+    line: "    worker_connections 4096;"
+
+- name: Start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded

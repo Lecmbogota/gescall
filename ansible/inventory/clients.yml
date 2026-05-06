@@ -1,0 +1,45 @@
+---
+# GesCall Client Inventory — cada cliente = 1 LXC en Proxmox
+# Agregar/editar entradas para dar de alta/modificar clientes
+all:
+  hosts:
+    cliente01:
+      # Red OVH
+      ovh_ip: 51.91.XXX.101              # ← IP failover de OVH
+      ovh_mac: "02:00:00:XX:XX:01"       # ← MAC virtual asignada por OVH
+      ovh_gateway: 51.91.XXX.1           # ← Gateway de la IP failover
+
+      # Proxmox
+      proxmox_node: pve
+      proxmox_template_id: 9000          # VMID del template LXC "gescall-golden"
+      lxc_vmid: 101
+      lxc_cores: 2
+      lxc_memory_mb: 1024
+      lxc_disk_gb: 20
+
+      # DNS (Hostinger)
+      subdomain: cliente01.midominio.com  # ← subdominio real
+      dns_zone: midominio.com
+
+      # SIP Trunk
+      sip_trunk_endpoint: trunk_cliente01
+      sip_trunk_host: sip.proveedor.com
+      sip_trunk_port: 5060
+      sip_trunk_prefix: "57"
+
+    # cliente02:
+    #   ovh_ip: 51.91.XXX.102
+    #   ovh_mac: "02:00:00:XX:XX:02"
+    #   ovh_gateway: 51.91.XXX.1
+    #   proxmox_node: pve
+    #   proxmox_template_id: 9000
+    #   lxc_vmid: 102
+    #   lxc_cores: 2
+    #   lxc_memory_mb: 1024
+    #   lxc_disk_gb: 20
+    #   subdomain: cliente02.midominio.com
+    #   dns_zone: midominio.com
+    #   sip_trunk_endpoint: trunk_cliente02
+    #   sip_trunk_host: sip.proveedor.com
+    #   sip_trunk_port: 5060
+    #   sip_trunk_prefix: "57"

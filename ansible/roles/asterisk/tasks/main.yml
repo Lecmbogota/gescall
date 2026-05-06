@@ -1,0 +1,93 @@
+---
+# Role: asterisk — Asterisk 20+ installation and GesCall dialplan
+
+- name: Install Asterisk dependencies
+  ansible.builtin.apt:
+    name:
+      - asterisk
+      - asterisk-dev
+      - asterisk-config
+      - asterisk-core-sounds-es
+      - asterisk-modules
+      - asterisk-mp3
+      - asterisk-mysql
+      - asterisk-voicemail
+      - libssl-dev
+      - libncurses5-dev
+      - libxml2-dev
+      - uuid-dev
+    state: present
+
+- name: Enable Asterisk HTTP server (for ARI/Stasis)
+  ansible.builtin.lineinfile:
+    path: /etc/asterisk/http.conf
+    regexp: "^;?enabled"
+    line: "enabled=yes"
+  notify: Reload Asterisk
+
+- name: Configure Asterisk HTTP bind address
+  ansible.builtin.lineinfile:
+    path: /etc/asterisk/http.conf
+    regexp: "^;?bindaddr"
+    line: "bindaddr=0.0.0.0"
+  notify: Reload Asterisk
+
+- name: Configure Asterisk HTTP port
+  ansible.builtin.lineinfile:
+    path: /etc/asterisk/http.conf
+    regexp: "^;?bindport"
+    line: "bindport=8088"
+
+- name: Create ARI user for GesCall
+  ansible.builtin.blockinfile:
+    path: /etc/asterisk/ari.conf
+    block: |
+      [{{ ari_user }}]
+      type = user
+      read_only = no
+      password = {{ ari_pass }}
+      password_format = plain
+    marker: "; {mark} ANSIBLE GESCALL ARI USER"
+  notify: Reload Asterisk
+  no_log: true
+
+- name: Deploy GesCall dialplan
+  ansible.builtin.template:
+    src: extensions-gescall.conf.j2
+    dest: /etc/asterisk/extensions-gescall.conf
+    mode: "0644"
+  notify: Reload Asterisk
+
+- name: Include dialplan in extensions.conf
+  ansible.builtin.lineinfile:
+    path: /etc/asterisk/extensions.conf
+    line: "#include extensions-gescall.conf"
+    create: yes
+  notify: Reload Asterisk
+
+- name: Ensure TTS cache directory exists
+  ansible.builtin.file:
+    path: /var/lib/asterisk/sounds/tts/piper
+    state: directory
+    owner: asterisk
+    group: asterisk
+    mode: "0755"
+
+- name: Ensure recording directory exists
+  ansible.builtin.file:
+    path: /var/spool/asterisk/recording
+    state: directory
+    owner: asterisk
+    group: asterisk
+    mode: "0755"
+
+- name: Ensure Asterisk is running
+  ansible.builtin.systemd:
+    name: asterisk
+    state: started
+    enabled: yes
+
+  handlers:
+    - name: Reload Asterisk
+      ansible.builtin.command: asterisk -rx 'module reload'
+      ignore_errors: yes

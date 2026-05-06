@@ -1,0 +1,32 @@
+---
+# Role: redis — Redis installation
+
+- name: Install Redis
+  ansible.builtin.apt:
+    name:
+      - redis-server
+    state: present
+
+- name: Configure Redis bind address
+  ansible.builtin.lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: "^bind "
+    line: "bind 127.0.0.1"
+
+- name: Configure Redis max memory
+  ansible.builtin.lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: "^#?maxmemory "
+    line: "maxmemory 512mb"
+
+- name: Configure Redis eviction policy
+  ansible.builtin.lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: "^#?maxmemory-policy "
+    line: "maxmemory-policy allkeys-lru"
+
+- name: Ensure Redis is running
+  ansible.builtin.systemd:
+    name: redis-server
+    state: started
+    enabled: yes

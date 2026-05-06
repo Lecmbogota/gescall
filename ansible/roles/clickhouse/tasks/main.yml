@@ -1,0 +1,30 @@
+---
+# Role: clickhouse — ClickHouse for cold log storage
+
+- name: Add ClickHouse APT repository key
+  ansible.builtin.apt_key:
+    url: https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key
+    state: present
+  ignore_errors: yes
+
+- name: Add ClickHouse APT repository
+  ansible.builtin.apt_repository:
+    repo: "deb https://packages.clickhouse.com/deb stable main"
+    state: present
+    update_cache: yes
+  ignore_errors: yes
+
+- name: Install ClickHouse server and client
+  ansible.builtin.apt:
+    name:
+      - clickhouse-server
+      - clickhouse-client
+    state: present
+  ignore_errors: yes
+
+- name: Ensure ClickHouse is running
+  ansible.builtin.systemd:
+    name: clickhouse-server
+    state: started
+    enabled: yes
+  ignore_errors: yes

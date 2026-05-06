@@ -19,25 +19,79 @@ const upload = multer({
     }
 });
 
-// SSH Configuration from environment
-const sshConfig = {
-    host: process.env.VICIDIAL_SSH_HOST || '209.38.233.46',
-    port: 22,
-    username: process.env.VICIDIAL_SSH_USER || 'root',
-    password: process.env.VICIDIAL_SSH_PASSWORD,
-    readyTimeout: 20000,
-    keepaliveInterval: 5000,
-    tryKeyboard: true, // Try keyboard-interactive auth
-    debug: (msg) => console.log('[SSH DEBUG]', msg), // Log SSH debug info
-};
-
 const soundsPath = process.env.ASTERISK_SOUNDS_PATH || '/var/lib/asterisk/sounds';
+
+/** Subida/listado remoto por SSH (por defecto). Use local si Node corre en el mismo host que Asterisk. */
+function isLocalAudioUpload() {
+    return String(process.env.AUDIO_UPLOAD_MODE || '').toLowerCase() === 'local';
+}
+
+function buildSshAuthConfig() {
+    const cfg = {
+        host: process.env.VICIDIAL_SSH_HOST || '209.38.233.46',
+        port: parseInt(String(process.env.VICIDIAL_SSH_PORT || '22'), 10) || 22,
+        username: process.env.VICIDIAL_SSH_USER || 'root',
+        readyTimeout: parseInt(String(process.env.VICIDIAL_SSH_READY_TIMEOUT_MS || '20000'), 10) || 20000,
+        keepaliveInterval: 5000,
+        tryKeyboard: process.env.VICIDIAL_SSH_TRY_KEYBOARD === '1',
+    };
+    const pass = process.env.VICIDIAL_SSH_PASSWORD;
+    if (pass != null && String(pass).length > 0) {
+        cfg.password = String(pass);
+    }
+    const keyPath = process.env.VICIDIAL_SSH_PRIVATE_KEY_PATH;
+    if (keyPath) {
+        try {
+            if (fs.existsSync(keyPath)) {
+                cfg.privateKey = fs.readFileSync(keyPath);
+                const ph = process.env.VICIDIAL_SSH_PASSPHRASE;
+                if (ph != null && String(ph).length > 0) {
+                    cfg.passphrase = String(ph);
+                }
+            }
+        } catch (e) {
+            console.error('[Audio] No se pudo leer VICIDIAL_SSH_PRIVATE_KEY_PATH:', e.message);
+        }
+    }
+    if (process.env.SSH_DEBUG === '1') {
+        cfg.debug = (msg) => console.log('[SSH DEBUG]', msg);
+    }
+    return cfg;
+}
+
+function assertRemoteSshConfigured() {
+    if (isLocalAudioUpload()) return;
+    const c = buildSshAuthConfig();
+    if (!c.password && !c.privateKey) {
+        throw new Error(
+            'Autenticación SSH no configurada: defina VICIDIAL_SSH_PASSWORD o VICIDIAL_SSH_PRIVATE_KEY_PATH en el backend. ' +
+                'Si GesCall y Asterisk están en el mismo servidor, use AUDIO_UPLOAD_MODE=local.'
+        );
+    }
+}
+
+function formatSshUserError(err) {
+    const m = err && err.message ? String(err.message) : '';
+    if (/All configured authentication methods failed/i.test(m)) {
+        return (
+            'Fallo de autenticación SSH al servidor de audios (usuario/clave o clave privada incorrectos, o servidor solo acepta clave). ' +
+            'Revise VICIDIAL_SSH_HOST, VICIDIAL_SSH_USER, VICIDIAL_SSH_PASSWORD o VICIDIAL_SSH_PRIVATE_KEY_PATH. ' +
+            'Si el API corre en el mismo host que Asterisk: AUDIO_UPLOAD_MODE=local.'
+        );
+    }
+    return m || 'Error de conexión SSH';
+}
 
 /**
  * Execute SSH command
  */
 function sshExec(command) {
     return new Promise((resolve, reject) => {
+        try {
+            assertRemoteSshConfigured();
+        } catch (e) {
+            return reject(e);
+        }
         const conn = new Client();
 
         conn.on('ready', () => {
@@ -73,7 +127,7 @@ function sshExec(command) {
             reject(err);
         });
 
-        conn.connect(sshConfig);
+        conn.connect(buildSshAuthConfig());
     });
 }
 
@@ -82,6 +136,11 @@ function sshExec(command) {
  */
 function sftpUpload(localPath, remotePath) {
     return new Promise((resolve, reject) => {
+        try {
+            assertRemoteSshConfigured();
+        } catch (e) {
+            return reject(e);
+        }
         const conn = new Client();
 
         conn.on('ready', () => {
@@ -106,7 +165,7 @@ function sftpUpload(localPath, remotePath) {
             reject(err);
         });
 
-        conn.connect(sshConfig);
+        conn.connect(buildSshAuthConfig());
     });
 }
 
@@ -115,6 +174,11 @@ function sftpUpload(localPath, remotePath) {
  */
 function sftpDelete(remotePath) {
     return new Promise((resolve, reject) => {
+        try {
+            assertRemoteSshConfigured();
+        } catch (e) {
+            return reject(e);
+        }
         const conn = new Client();
 
         conn.on('ready', () => {
@@ -139,7 +203,7 @@ function sftpDelete(remotePath) {
             reject(err);
         });
 
-        conn.connect(sshConfig);
+        conn.connect(buildSshAuthConfig());
     });
 }
 
@@ -153,6 +217,38 @@ function sftpDelete(remotePath) {
  */
 router.get('/', async (req, res) => {
     try {
+        if (isLocalAudioUpload()) {
+            const audioFiles = [];
+            if (fs.existsSync(soundsPath)) {
+                const names = fs.readdirSync(soundsPath);
+                for (const filename of names) {
+                    if (!filename.startsWith('gc_')) continue;
+                    const fp = path.join(soundsPath, filename);
+                    let st;
+                    try {
+                        st = fs.statSync(fp);
+                    } catch {
+                        continue;
+                    }
+                    if (!st.isFile()) continue;
+                    audioFiles.push({
+                        filename,
+                        path: fp,
+                        size: st.size,
+                        modified: st.mtime.toISOString(),
+                        type: path.extname(filename).toLowerCase().replace('.', ''),
+                    });
+                }
+            }
+            audioFiles.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
+            const top = audioFiles.slice(0, 200);
+            return res.json({
+                success: true,
+                data: top,
+                total: top.length,
+            });
+        }
+
         // List wav files in sounds directory
         // Use find -printf to get name, size and modified time in one go
         // Filter: Only gc_ files, sorted by date DESC, max 200. Follow symlinks (-L)
@@ -197,7 +293,7 @@ router.get('/', async (req, res) => {
         console.error('[Audio] List error:', error);
         res.status(500).json({
             success: false,
-            error: error.message,
+            error: formatSshUserError(error),
         });
     }
 });
@@ -245,7 +341,84 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
 
         console.log(`[Audio] Uploading temp file: ${remoteTempPath} for Campaign: ${campaign}`);
 
-        // 2. Upload original file to temp path
+        const { execFileSync } = require('child_process');
+
+        // Mismo host que Asterisk: escribir en ASTERISK_SOUNDS_PATH sin SSH (evita error de auth ssh2).
+        if (isLocalAudioUpload()) {
+            try {
+                if (!fs.existsSync(soundsPath)) {
+                    fs.mkdirSync(soundsPath, { recursive: true });
+                }
+                fs.copyFileSync(localPath, remoteTempPath);
+                const commandExists = (name) => {
+                    try {
+                        execFileSync('sh', ['-lc', `command -v ${name}`], { stdio: 'ignore' });
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
+                };
+                try {
+                    if (commandExists('sox')) {
+                        execFileSync(
+                            'sox',
+                            [remoteTempPath, '-r', '8000', '-c', '1', '-e', 'signed-integer', '-b', '16', remoteFinalPath],
+                            { timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'] }
+                        );
+                    } else if (commandExists('ffmpeg')) {
+                        execFileSync(
+                            'ffmpeg',
+                            ['-y', '-i', remoteTempPath, '-ar', '8000', '-ac', '1', '-sample_fmt', 's16', remoteFinalPath],
+                            { timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'] }
+                        );
+                    } else {
+                        throw new Error('No está instalado sox ni ffmpeg');
+                    }
+                } catch (convertErr) {
+                    throw new Error(
+                        `Conversión de audio falló: ${convertErr.message || convertErr}. Instale sox/ffmpeg en el servidor o use subida por SSH.`
+                    );
+                }
+                try {
+                    fs.unlinkSync(remoteTempPath);
+                } catch (e) {
+                    /* ignore */
+                }
+                try {
+                    fs.chmodSync(remoteFinalPath, 0o644);
+                } catch (e) {
+                    /* ignore */
+                }
+                try {
+                    fs.unlinkSync(localPath);
+                } catch (e) {
+                    /* ignore */
+                }
+                console.log(`[Audio] Local upload OK: ${finalFilename}`);
+                return res.json({
+                    success: true,
+                    message: 'Audio subido y convertido exitosamente',
+                    data: {
+                        filename: finalFilename,
+                        path: remoteFinalPath,
+                    },
+                });
+            } catch (localErr) {
+                try {
+                    if (fs.existsSync(remoteTempPath)) fs.unlinkSync(remoteTempPath);
+                } catch (e) {
+                    /* ignore */
+                }
+                try {
+                    if (fs.existsSync(remoteFinalPath)) fs.unlinkSync(remoteFinalPath);
+                } catch (e) {
+                    /* ignore */
+                }
+                throw localErr;
+            }
+        }
+
+        // 2. Upload original file to temp path (SFTP remoto)
         await sftpUpload(localPath, remoteTempPath);
 
         console.log(`[Audio] Converting to WAV 8kHz Mono: ${remoteFinalPath}`);
@@ -278,7 +451,11 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
             console.error('[Audio] Conversion error:', conversionError);
 
             // Try to cleanup remote temp file
-            try { await sftpDelete(remoteTempPath); } catch (e) { }
+            try {
+                await sftpDelete(remoteTempPath);
+            } catch (e) {
+                /* ignore */
+            }
 
             throw new Error(`Error en la conversión de audio: ${conversionError.message}`);
         }
@@ -292,236 +469,12 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
 
         res.status(500).json({
             success: false,
-            error: error.message,
+            error: formatSshUserError(error),
         });
     }
 });
 
-/**
- * DELETE /api/audio/:filename
- * Delete audio file from Vicidial server
- */
-router.delete('/:filename', async (req, res) => {
-    try {
-        const { filename } = req.params;
-
-        // Security: prevent path traversal
-        if (filename.includes('/') || filename.includes('..')) {
-            return res.status(400).json({
-                success: false,
-                error: 'Nombre de archivo inválido',
-            });
-        }
-
-        // Security: ONLY allow deleting gescall files
-        if (!filename.startsWith('gc_')) {
-            return res.status(403).json({
-                success: false,
-                error: 'No tienes permiso para eliminar este archivo de sistema',
-            });
-        }
-
-        const remotePath = path.join(soundsPath, filename);
-
-        console.log(`[Audio] Deleting: ${remotePath}`);
-
-        await sftpDelete(remotePath);
-
-        console.log(`[Audio] Delete successful: ${filename}`);
-
-        res.json({
-            success: true,
-            message: 'Audio eliminado exitosamente',
-        });
-    } catch (error) {
-        console.error('[Audio] Delete error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-        });
-    }
-});
-
-/**
- * GET /api/audio/:filename/info
- * Get audio file info
- */
-router.get('/:filename/info', async (req, res) => {
-    try {
-        const { filename } = req.params;
-
-        // Security: prevent path traversal
-        if (filename.includes('/') || filename.includes('..')) {
-            return res.status(400).json({
-                success: false,
-                error: 'Nombre de archivo inválido',
-            });
-        }
-
-        const remotePath = path.join(soundsPath, filename);
-
-        // Get file info using soxi (sox info) or file command
-        let info = {};
-        try {
-            const soxiOutput = await sshExec(`soxi "${remotePath}" 2>/dev/null || echo "No soxi"`);
-            if (!soxiOutput.includes('No soxi')) {
-                // Parse soxi output
-                const lines = soxiOutput.split('\n');
-                lines.forEach(line => {
-                    const [key, ...value] = line.split(':');
-                    if (key && value.length) {
-                        info[key.trim().toLowerCase().replace(/\s+/g, '_')] = value.join(':').trim();
-                    }
-                });
-            }
-        } catch (e) {
-            // soxi not available, get basic info
-            const statOutput = await sshExec(`stat -c '%s' "${remotePath}"`);
-            info.size = parseInt(statOutput) || 0;
-        }
-
-        res.json({
-            success: true,
-            data: {
-                filename,
-                path: remotePath,
-                ...info,
-            },
-        });
-    } catch (error) {
-        console.error('[Audio] Info error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-        });
-    }
-});
-
-/**
- * GET /api/audio/:filename/stream
- * Stream audio file from Vicidial server
- */
-router.get('/:filename/stream', (req, res) => {
-    const { filename } = req.params;
-
-    // Security check
-    if (filename.includes('/') || filename.includes('..')) {
-        return res.status(400).send('Invalid filename');
-    }
-
-    const remotePath = path.join(soundsPath, filename);
-    const conn = new Client();
-
-    conn.on('ready', () => {
-        conn.sftp((err, sftp) => {
-            if (err) {
-                conn.end();
-                console.error('[Audio] Stream SFTP error:', err);
-                return res.status(500).send('SFTP Error');
-            }
-
-            // Check if file exists and get size
-            console.log(`[Audio Debug] Attempting to stream: "${remotePath}"`);
-
-            sftp.stat(remotePath, (err, stats) => {
-                if (err) {
-                    conn.end();
-                    console.error(`[Audio Debug] Stat error for "${remotePath}":`, err);
-                    return res.status(404).send(`File not found: ${err.message}`);
-                }
-
-                // Set headers
-                const ext = path.extname(filename).toLowerCase();
-                let contentType = 'audio/wav';
-                if (ext === '.mp3') contentType = 'audio/mpeg';
-                else if (ext === '.gsm') contentType = 'audio/x-gsm';
-
-                res.setHeader('Content-Type', contentType);
-                res.setHeader('Content-Length', stats.size);
-                res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-
-                // Create read stream
-                const stream = sftp.createReadStream(remotePath);
-
-                stream.on('error', (streamErr) => {
-                    console.error('[Audio] Stream read error:', streamErr);
-                    conn.end();
-                });
-
-                stream.on('end', () => {
-                    console.log(`[Audio] Stream finished: ${filename}`);
-                    conn.end();
-                });
-
-                // Pipe to response
-                stream.pipe(res);
-            });
-        });
-    });
-
-    conn.on('error', (err) => {
-        console.error('[Audio] Stream connection error:', err);
-        if (!res.headersSent) {
-            res.status(500).send('Connection Error');
-        }
-    });
-
-    conn.connect(sshConfig);
-});
-
-// ─────────────────── CALL RECORDINGS ───────────────────
-
-/**
- * GET /api/audio/recordings/:filename
- * Stream call recording from Asterisk
- */
-router.get('/recordings/:filename', (req, res) => {
-    const { filename } = req.params;
-
-    if (filename.includes('/') || filename.includes('..')) {
-        return res.status(400).send('Invalid filename');
-    }
-
-    const recordingsPath = '/var/spool/asterisk/recording';
-    const remotePath = path.join(recordingsPath, filename);
-    const conn = new Client();
-
-    conn.on('ready', () => {
-        conn.sftp((err, sftp) => {
-            if (err) {
-                conn.end();
-                console.error('[Audio] Recordings SFTP error:', err);
-                return res.status(500).send('SFTP Error');
-            }
-
-            sftp.stat(remotePath, (err, stats) => {
-                if (err) {
-                    conn.end();
-                    return res.status(404).json({ success: false, error: 'Recording not found' });
-                }
-
-                res.setHeader('Content-Type', 'audio/wav');
-                res.setHeader('Content-Length', stats.size);
-                res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-
-                const stream = sftp.createReadStream(remotePath);
-                stream.on('error', () => conn.end());
-                stream.on('end', () => conn.end());
-
-                stream.pipe(res);
-            });
-        });
-    });
-
-    conn.on('error', (err) => {
-        console.error('[Audio] Recordings SSH error:', err);
-        if (!res.headersSent) res.status(500).send('Connection Error');
-    });
-
-    conn.connect(sshConfig);
-});
-
-// ─────────────────── MOH Classes ───────────────────
+// ─────────────────── MOH (rutas fijas antes de "/:filename") ───────────────────
 
 /**
  * GET /api/audio/moh-classes
@@ -730,6 +683,320 @@ router.delete('/moh/:campaign', async (req, res) => {
         console.error('[Audio MOH] Delete error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+/**
+ * DELETE /api/audio/:filename
+ * Delete audio file from Vicidial server
+ */
+router.delete('/:filename', async (req, res) => {
+    try {
+        const { filename } = req.params;
+
+        // Security: prevent path traversal
+        if (filename.includes('/') || filename.includes('..')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nombre de archivo inválido',
+            });
+        }
+
+        // Security: ONLY allow deleting gescall files
+        if (!filename.startsWith('gc_')) {
+            return res.status(403).json({
+                success: false,
+                error: 'No tienes permiso para eliminar este archivo de sistema',
+            });
+        }
+
+        const remotePath = path.join(soundsPath, filename);
+
+        console.log(`[Audio] Deleting: ${remotePath}`);
+
+        if (isLocalAudioUpload()) {
+            if (!fs.existsSync(remotePath)) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Archivo no encontrado',
+                });
+            }
+            fs.unlinkSync(remotePath);
+        } else {
+            await sftpDelete(remotePath);
+        }
+
+        console.log(`[Audio] Delete successful: ${filename}`);
+
+        res.json({
+            success: true,
+            message: 'Audio eliminado exitosamente',
+        });
+    } catch (error) {
+        console.error('[Audio] Delete error:', error);
+        res.status(500).json({
+            success: false,
+            error: formatSshUserError(error),
+        });
+    }
+});
+
+/**
+ * GET /api/audio/:filename/info
+ * Get audio file info
+ */
+router.get('/:filename/info', async (req, res) => {
+    try {
+        const { filename } = req.params;
+
+        // Security: prevent path traversal
+        if (filename.includes('/') || filename.includes('..')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nombre de archivo inválido',
+            });
+        }
+
+        const remotePath = path.join(soundsPath, filename);
+
+        // Get file info using soxi (sox info) or file command
+        let info = {};
+        if (isLocalAudioUpload()) {
+            if (!fs.existsSync(remotePath)) {
+                return res.status(404).json({ success: false, error: 'Archivo no encontrado' });
+            }
+            const st = fs.statSync(remotePath);
+            info.size = st.size;
+            try {
+                const { execSync } = require('child_process');
+                const soxiOutput = execSync(`soxi "${remotePath}" 2>/dev/null || echo "No soxi"`, {
+                    encoding: 'utf8',
+                    timeout: 5000,
+                });
+                if (!soxiOutput.includes('No soxi')) {
+                    const lines = soxiOutput.split('\n');
+                    lines.forEach((line) => {
+                        const [key, ...value] = line.split(':');
+                        if (key && value.length) {
+                            info[key.trim().toLowerCase().replace(/\s+/g, '_')] = value.join(':').trim();
+                        }
+                    });
+                }
+            } catch (e) {
+                /* size already from stat */
+            }
+        } else {
+            try {
+                const soxiOutput = await sshExec(`soxi "${remotePath}" 2>/dev/null || echo "No soxi"`);
+                if (!soxiOutput.includes('No soxi')) {
+                    const lines = soxiOutput.split('\n');
+                    lines.forEach((line) => {
+                        const [key, ...value] = line.split(':');
+                        if (key && value.length) {
+                            info[key.trim().toLowerCase().replace(/\s+/g, '_')] = value.join(':').trim();
+                        }
+                    });
+                }
+            } catch (e) {
+                const statOutput = await sshExec(`stat -c '%s' "${remotePath}"`);
+                info.size = parseInt(statOutput) || 0;
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                filename,
+                path: remotePath,
+                ...info,
+            },
+        });
+    } catch (error) {
+        console.error('[Audio] Info error:', error);
+        res.status(500).json({
+            success: false,
+            error: formatSshUserError(error),
+        });
+    }
+});
+
+/**
+ * GET /api/audio/:filename/stream
+ * Stream audio file from Vicidial server
+ */
+router.get('/:filename/stream', (req, res) => {
+    const { filename } = req.params;
+
+    // Security check
+    if (filename.includes('/') || filename.includes('..')) {
+        return res.status(400).send('Invalid filename');
+    }
+
+    const remotePath = path.join(soundsPath, filename);
+
+    if (isLocalAudioUpload()) {
+        if (!fs.existsSync(remotePath)) {
+            return res.status(404).send('File not found');
+        }
+        let st;
+        try {
+            st = fs.statSync(remotePath);
+        } catch (e) {
+            return res.status(404).send('File not found');
+        }
+        const ext = path.extname(filename).toLowerCase();
+        let contentType = 'audio/wav';
+        if (ext === '.mp3') contentType = 'audio/mpeg';
+        else if (ext === '.gsm') contentType = 'audio/x-gsm';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Length', st.size);
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        const stream = fs.createReadStream(remotePath);
+        stream.on('error', (err) => {
+            console.error('[Audio] Stream local read error:', err);
+            if (!res.headersSent) res.status(500).end();
+        });
+        stream.pipe(res);
+        return;
+    }
+
+    try {
+        assertRemoteSshConfigured();
+    } catch (e) {
+        return res.status(503).json({ success: false, error: e.message });
+    }
+
+    const conn = new Client();
+
+    conn.on('ready', () => {
+        conn.sftp((err, sftp) => {
+            if (err) {
+                conn.end();
+                console.error('[Audio] Stream SFTP error:', err);
+                return res.status(500).send('SFTP Error');
+            }
+
+            // Check if file exists and get size
+            console.log(`[Audio Debug] Attempting to stream: "${remotePath}"`);
+
+            sftp.stat(remotePath, (err, stats) => {
+                if (err) {
+                    conn.end();
+                    console.error(`[Audio Debug] Stat error for "${remotePath}":`, err);
+                    return res.status(404).send(`File not found: ${err.message}`);
+                }
+
+                // Set headers
+                const ext = path.extname(filename).toLowerCase();
+                let contentType = 'audio/wav';
+                if (ext === '.mp3') contentType = 'audio/mpeg';
+                else if (ext === '.gsm') contentType = 'audio/x-gsm';
+
+                res.setHeader('Content-Type', contentType);
+                res.setHeader('Content-Length', stats.size);
+                res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+                // Create read stream
+                const stream = sftp.createReadStream(remotePath);
+
+                stream.on('error', (streamErr) => {
+                    console.error('[Audio] Stream read error:', streamErr);
+                    conn.end();
+                });
+
+                stream.on('end', () => {
+                    console.log(`[Audio] Stream finished: ${filename}`);
+                    conn.end();
+                });
+
+                // Pipe to response
+                stream.pipe(res);
+            });
+        });
+    });
+
+    conn.on('error', (err) => {
+        console.error('[Audio] Stream connection error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: formatSshUserError(err) });
+        }
+    });
+
+    conn.connect(buildSshAuthConfig());
+});
+
+// ─────────────────── CALL RECORDINGS ───────────────────
+
+/**
+ * GET /api/audio/recordings/:filename
+ * Stream call recording from Asterisk
+ */
+router.get('/recordings/:filename', (req, res) => {
+    const { filename } = req.params;
+
+    if (filename.includes('/') || filename.includes('..')) {
+        return res.status(400).send('Invalid filename');
+    }
+
+    const recordingsPath = '/var/spool/asterisk/recording';
+    const remotePath = path.join(recordingsPath, filename);
+
+    if (isLocalAudioUpload()) {
+        if (!fs.existsSync(remotePath)) {
+            return res.status(404).json({ success: false, error: 'Recording not found' });
+        }
+        const st = fs.statSync(remotePath);
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Length', st.size);
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        fs.createReadStream(remotePath)
+            .on('error', () => {
+                if (!res.headersSent) res.status(500).end();
+            })
+            .pipe(res);
+        return;
+    }
+
+    try {
+        assertRemoteSshConfigured();
+    } catch (e) {
+        return res.status(503).json({ success: false, error: e.message });
+    }
+
+    const conn = new Client();
+
+    conn.on('ready', () => {
+        conn.sftp((err, sftp) => {
+            if (err) {
+                conn.end();
+                console.error('[Audio] Recordings SFTP error:', err);
+                return res.status(500).send('SFTP Error');
+            }
+
+            sftp.stat(remotePath, (err, stats) => {
+                if (err) {
+                    conn.end();
+                    return res.status(404).json({ success: false, error: 'Recording not found' });
+                }
+
+                res.setHeader('Content-Type', 'audio/wav');
+                res.setHeader('Content-Length', stats.size);
+                res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+                const stream = sftp.createReadStream(remotePath);
+                stream.on('error', () => conn.end());
+                stream.on('end', () => conn.end());
+
+                stream.pipe(res);
+            });
+        });
+    });
+
+    conn.on('error', (err) => {
+        console.error('[Audio] Recordings SSH error:', err);
+        if (!res.headersSent) res.status(500).json({ success: false, error: formatSshUserError(err) });
+    });
+
+    conn.connect(buildSshAuthConfig());
 });
 
 module.exports = router;
