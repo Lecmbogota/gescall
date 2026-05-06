@@ -162,8 +162,13 @@ export default function App() {
 
   // Determine if user is an agent by explicitly evaluating their role group
   const userGroupName = session?.user?.group?.toLowerCase() || '';
-  const isAgent = userGroupName === 'agente' || userGroupName === 'agent' || 
-                  (!session?.permissions?.granted?.includes('admin') && !session?.permissions?.granted?.includes('view_campaigns'));
+  const isSystemAdmin = session?.user?.is_system === true;
+  const hasAdminPerm = session?.permissions?.granted?.includes('admin') || 
+                       session?.permissions?.granted?.includes('admin_all') ||
+                       session?.permissions?.granted?.includes('view_campaigns');
+  const isAgent = !isSystemAdmin && (
+    userGroupName === 'agente' || userGroupName === 'agent' || !hasAdminPerm
+  );
 
   if (isAgent) {
     return (

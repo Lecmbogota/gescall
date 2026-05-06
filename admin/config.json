@@ -1,0 +1,17 @@
+{
+ 	"postgres": {
+ 		"host": "127.0.0.1:5432",
+ 		"user": "gescall_admin",
+ 		"pass": "changeme",
+ 		"name": "semaphore",
+ 		"options": {
+ 			"sslmode": "disable"
+ 		}
+ 	},
+ 	"dialect": "postgres",
+ 	"tmp_path": "/tmp/semaphore",
+ 	"web_host": "http://72.251.5.147:3002",
+ 	"cookie_hash": "V0DvUZu0nzPWMHZEPV2q+R556MVuT1XmVqtFVytwOFI=",
+ 	"cookie_encryption": "z3tYPnySQpCnDq5lDuf1ztik4s2uUGxidpiGQKZVUvE=",
+ 	"access_key_encryption": "IVjCg2ZZtw83+xHApV2c+x9GTZa8YVu/35LXCqH5F/E="
+ }
