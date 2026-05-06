@@ -11,7 +11,7 @@
     ansible_user: root
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     gescall_install_dir: /opt/gescall
-    gescall_repo_url: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/anomalyco/gescall.git', true) }}"
+    gescall_repo_url: "{{ lookup('env', 'GESCALL_REPO') | default('https://github.com/Lecmbogota/gescall.git', true) }}"
     gescall_git_ref: "{{ gescall_version | default(lookup('env', 'GESCALL_VERSION') | default('main', true), true) }}"
     pg_database: gescall_db
     pg_user: gescall_admin
@@ -24,9 +24,10 @@
     frontend_build_dir: /var/www/gescall
 
   tasks:
-    - name: Skip configuration when another Semaphore action was requested
+    # Solo aplica cuando configure.yml se invoca vía semaphore-deploy.yml con deploy_action=provision.
+    - name: Skip configuration when deploy_action is provision-only
       ansible.builtin.meta: end_play
-      when: deploy_action | default(action | default('configure')) not in ['configure', 'full']
+      when: (deploy_action | default('', true) | trim) == 'provision'
 
     - name: Validate deploy secrets
       ansible.builtin.assert:
