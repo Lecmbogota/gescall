@@ -118,6 +118,25 @@
       ansible.builtin.shell: pm2 startup systemd -u root --hp /root
       ignore_errors: yes
 
+    - name: Remove legacy wildcard Nginx configs
+      ansible.builtin.shell: rm -f /etc/nginx/conf.d/*.conf
+      ignore_errors: yes
+
+    - name: Deploy Nginx configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/roles/gescall/templates/nginx.conf.j2"
+        dest: "/etc/nginx/conf.d/{{ subdomain }}.conf"
+
+    - name: Reload Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Obtain SSL certificate via Certbot
+      ansible.builtin.shell: >
+        certbot --nginx -n --agree-tos -m admin@chocktelecomsys.com -d {{ subdomain }} --redirect
+      ignore_errors: yes
+
     - name: Verify backend health
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ backend_port }}/health"

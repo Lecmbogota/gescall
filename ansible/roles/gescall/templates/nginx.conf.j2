@@ -1,0 +1,47 @@
+server {
+    listen 80;
+    server_name {{ subdomain }};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # Certbot will automatically inject the HTTPS redirect here.
+    # We provide the base block so certbot --nginx can find the domain.
+    
+    root /var/www/gescall;
+    index index.html;
+
+    location /api {
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache_bypass $http_upgrade;
+        client_max_body_size 500M;
+    }
+
+    location /socket.io/ {
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:8088/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
