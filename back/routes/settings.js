@@ -12,9 +12,6 @@ router.get('/', async (req, res) => {
         #swagger.security = [{ "apiKeyAuth": [] }, { "bearerAuth": [] }]
     */
     try {
-        if (!USE_NATIVE_DB) {
-            return res.json({ success: true, data: { timezone: 'America/Bogota' } });
-        }
 
         const result = await pgDatabase.query('SELECT setting_key, setting_value FROM gescall_settings');
         const settings = {};
@@ -60,18 +57,16 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ success: false, error: 'No se enviaron configuraciones para actualizar' });
         }
 
-        if (USE_NATIVE_DB) {
-            // Update individual settings atomically
-            for (const [key, value] of Object.entries(updates)) {
-                if (typeof value === 'string') {
-                    await pgDatabase.query(
-                        `INSERT INTO gescall_settings (setting_key, setting_value, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP) 
-                         ON CONFLICT (setting_key) 
-                         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP`,
-                        [key, value]
-                    );
-                }
+        // Update individual settings atomically
+        for (const [key, value] of Object.entries(updates)) {
+            if (typeof value === 'string') {
+                await pgDatabase.query(
+                    `INSERT INTO gescall_settings (setting_key, setting_value, updated_at) 
+                     VALUES ($1, $2, CURRENT_TIMESTAMP) 
+                     ON CONFLICT (setting_key) 
+                     DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP`,
+                    [key, value]
+                );
             }
         }
 
