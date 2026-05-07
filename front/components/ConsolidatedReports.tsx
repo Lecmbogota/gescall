@@ -51,6 +51,7 @@ interface CallRecord {
     list_description?: string;
     length_in_sec?: number;
     typification_name?: string;
+    disposition?: string;
 }
 
 interface CampaignOption {
@@ -620,7 +621,7 @@ export function ConsolidatedReports({ onBack }: ConsolidatedReportsProps = {}) {
                 <table className="w-full border-collapse text-sm">
                     <thead className="sticky top-0 z-10">
                         <tr className="bg-slate-800/95 backdrop-blur-md text-white">
-                            {["Fecha", "Hora", "Campaña", "Lista", "Desc. Lista", "Teléfono", "Identificador", "CallerID", "Estado", "DTMF", "Duración"].map(
+                            {["Fecha", "Hora", "Campaña", "Lista", "Desc. Lista", "Teléfono", "Identificador", "CallerID", "Disposición", "Estado", "DTMF", "Duración"].map(
                                 (col) => (
                                     <th
                                         key={col}
@@ -696,6 +697,9 @@ export function ConsolidatedReports({ onBack }: ConsolidatedReportsProps = {}) {
                                         </td>
                                         <td className="px-3 py-1.5 font-mono text-xs text-slate-600 whitespace-nowrap">
                                             {r.caller_id || "—"}
+                                        </td>
+                                        <td className="px-3 py-1.5 text-sm text-slate-700 whitespace-nowrap">
+                                            {r.typification_name || r.disposition || status.label || "—"}
                                         </td>
                                         <td className="px-3 py-1.5 whitespace-nowrap">
                                             <span
