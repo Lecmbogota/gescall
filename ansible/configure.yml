@@ -154,7 +154,7 @@
       register: health
       retries: 10
       delay: 2
-      until: health.json.status == 'ok'
+      until: health.status == 200 and health.json is defined and health.json.status == 'ok'
 
     - name: Deployment complete
       ansible.builtin.debug:
