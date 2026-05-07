@@ -503,7 +503,7 @@ router.get('/:campaign_id/lists', async (req, res) => {
             FROM gescall_lists l
             LEFT JOIN gescall_leads led ON l.list_id = led.list_id
             WHERE l.campaign_id = $1
-            GROUP BY l.list_id
+            GROUP BY l.list_id, l.list_name, l.campaign_id, l.active, l.created_at, l.updated_at, l.updated_by, l.tts_template_id
             ORDER BY l.list_id DESC
         `, [campaign_id]);
         const rowsWithMappedActive = rows.map(r => ({
