@@ -1,0 +1,14 @@
+---
+- name: Drop dialer_shard_id from all tables
+  hosts: all
+  become: yes
+  vars:
+    ansible_host: "{{ ovh_ip }}"
+    ansible_user: root
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  tasks:
+    - name: Drop dialer_shard_id columns
+      ansible.builtin.shell: |
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_campaigns DROP COLUMN IF EXISTS dialer_shard_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_leads DROP COLUMN IF EXISTS dialer_shard_id CASCADE;'"
+      ignore_errors: yes

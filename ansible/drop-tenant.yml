@@ -1,0 +1,18 @@
+---
+- name: Drop tenant_id from all tables
+  hosts: all
+  become: yes
+  vars:
+    ansible_host: "{{ ovh_ip }}"
+    ansible_user: root
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  tasks:
+    - name: Drop tenant_id columns
+      ansible.builtin.shell: |
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_campaigns DROP COLUMN IF EXISTS tenant_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_users DROP COLUMN IF EXISTS tenant_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_leads DROP COLUMN IF EXISTS tenant_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_lists DROP COLUMN IF EXISTS tenant_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'ALTER TABLE gescall_agent_sessions DROP COLUMN IF EXISTS tenant_id CASCADE;'"
+        su - postgres -c "psql -d gescall_db -c 'DROP TABLE IF EXISTS gescall_tenants CASCADE;'"
+      ignore_errors: yes
