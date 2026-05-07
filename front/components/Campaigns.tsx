@@ -532,64 +532,68 @@ export function Campaigns({ username, onSelectCampaign }: CampaignsProps) {
               </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Nivel de marcación</label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    min="1.0"
-                    placeholder="1.0"
-                    value={createForm.auto_dial_level}
-                    onChange={(e) => setCreateForm(f => ({ ...f, auto_dial_level: e.target.value }))}
-                    className="rounded-xl"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Número de reintentos</label>
-                  <Input
-                    type="number"
-                    min="0"
-                    placeholder="3"
-                    value={createForm.max_retries}
-                    onChange={(e) => setCreateForm(f => ({ ...f, max_retries: parseInt(e.target.value) || 0 }))}
-                    className="rounded-xl"
-                  />
-                </div>
-              </div>
+              {createForm.campaign_type !== 'INBOUND' && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Nivel de marcación</label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="1.0"
+                        placeholder="1.0"
+                        value={createForm.auto_dial_level}
+                        onChange={(e) => setCreateForm(f => ({ ...f, auto_dial_level: e.target.value }))}
+                        className="rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Número de reintentos</label>
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="3"
+                        value={createForm.max_retries}
+                        onChange={(e) => setCreateForm(f => ({ ...f, max_retries: parseInt(e.target.value) || 0 }))}
+                        className="rounded-xl"
+                      />
+                    </div>
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">CallerID por defecto</label>
-                <Input
-                  placeholder="0000000000"
-                  value={createForm.campaign_cid}
-                  onChange={(e) => setCreateForm(f => ({ ...f, campaign_cid: e.target.value.replace(/[^0-9]/g, '').slice(0, 20) }))}
-                  className="rounded-xl"
-                />
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">CallerID por defecto</label>
+                    <Input
+                      placeholder="0000000000"
+                      value={createForm.campaign_cid}
+                      onChange={(e) => setCreateForm(f => ({ ...f, campaign_cid: e.target.value.replace(/[^0-9]/g, '').slice(0, 20) }))}
+                      className="rounded-xl"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Prefijo del país</label>
-                <Select
-                  value={createForm.dial_prefix}
-                  onValueChange={(value) => setCreateForm(f => ({ ...f, dial_prefix: value }))}
-                >
-                  <SelectTrigger className="rounded-xl">
-                    <SelectValue placeholder="Seleccione un prefijo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {prefixes.map((p) => (
-                      <SelectItem key={String(p.id)} value={String(p.prefix)}>
-                        {p.country_name} (+{p.prefix})
-                      </SelectItem>
-                    ))}
-                    {prefixes.length === 0 && (
-                      <SelectItem value="52">México (+52) - Fallback</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-slate-400 mt-1">Prefijo que se antepone al número al marcar</p>
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Prefijo del país</label>
+                    <Select
+                      value={createForm.dial_prefix}
+                      onValueChange={(value) => setCreateForm(f => ({ ...f, dial_prefix: value }))}
+                    >
+                      <SelectTrigger className="rounded-xl">
+                        <SelectValue placeholder="Seleccione un prefijo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {prefixes.map((p) => (
+                          <SelectItem key={String(p.id)} value={String(p.prefix)}>
+                            {p.country_name} (+{p.prefix})
+                          </SelectItem>
+                        ))}
+                        {prefixes.length === 0 && (
+                          <SelectItem value="52">México (+52) - Fallback</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-slate-400 mt-1">Prefijo que se antepone al número al marcar</p>
+                  </div>
+                </>
+              )}
             </div>
 
             {createError && (
