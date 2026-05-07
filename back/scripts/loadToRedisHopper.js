@@ -49,7 +49,7 @@ async function loadHopper() {
                     SELECT led.lead_id, led.phone_number, led.first_name, led.last_name, led.vendor_lead_code, led.phone_index, led.tts_vars, ls.campaign_id, ls.list_id
                     FROM gescall_leads led
                     JOIN gescall_lists ls ON led.list_id = ls.list_id
-                    WHERE (led.status = 'NEW' OR (led.status = 'QUEUE' AND led.last_call_time IS NULL))
+                    WHERE led.status = 'NEW'
                       AND ls.campaign_id = $1
                       AND ls.active = true
                       AND (cardinality($3::bigint[]) = 0 OR NOT (led.lead_id = ANY($3::bigint[])))

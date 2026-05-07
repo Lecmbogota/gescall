@@ -1448,8 +1448,6 @@ router.post('/create', async (req, res) => {
             data: {
                 campaign_id: cid,
                 campaign_name: cname,
-                user: cid,
-                user_password: userPass,
                 dial_prefix: dial_prefix,
                 campaign_type: campaign_type
             },
