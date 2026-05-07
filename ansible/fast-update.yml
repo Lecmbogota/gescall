@@ -1,9 +1,12 @@
 ---
 - name: Fast update for GesCall code
-  hosts: clients
+  hosts: all
   become: yes
   gather_facts: false
   vars:
+    ansible_host: "{{ ovh_ip }}"
+    ansible_user: root
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     gescall_install_dir: /opt/gescall
     
   tasks:
