@@ -17,6 +17,18 @@ async function migrate() {
     try {
         await client.query('BEGIN');
 
+        const checkCol = await client.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='gescall_campaigns' AND column_name='trunk_id'
+        `);
+        
+        if (checkCol.rows.length === 0) {
+            console.log('[Migration 026] gescall_campaigns.trunk_id does not exist, skipping');
+            await client.query('COMMIT');
+            return;
+        }
+
         const insertRes = await client.query(`
             INSERT INTO gescall_route_rules (
                 direction, priority, active, trunk_id, match_did, match_campaign_id,
