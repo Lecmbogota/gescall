@@ -62,15 +62,33 @@ export function useWebPhone(extension?: string, password?: string, wsUrl?: strin
         setAudioStream();
       });
 
+      const cleanupMedia = () => {
+        if (newSession.connection) {
+          const senders = newSession.connection.getSenders();
+          senders.forEach(sender => {
+            if (sender.track) {
+              sender.track.stop();
+            }
+          });
+        }
+        if (audioRef.current && audioRef.current.srcObject) {
+          const stream = audioRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          audioRef.current.srcObject = null;
+        }
+      };
+
       if (newSession.connection) {
         newSession.connection.addEventListener('track', setAudioStream);
         setAudioStream(); // Check immediately for incoming calls
       }
       newSession.on('ended', () => {
+        cleanupMedia();
         setSession(null);
         setStatus('registered');
       });
       newSession.on('failed', () => {
+        cleanupMedia();
         setSession(null);
         setStatus('registered');
       });
@@ -130,6 +148,15 @@ export function useWebPhone(extension?: string, password?: string, wsUrl?: strin
 
   const hangup = () => {
     if (session) {
+      if (session.connection) {
+        session.connection.getSenders().forEach((s: any) => {
+          if (s.track) s.track.stop();
+        });
+      }
+      if (audioRef.current && audioRef.current.srcObject) {
+        (audioRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+        audioRef.current.srcObject = null;
+      }
       session.terminate();
       setSession(null);
       setStatus('registered');
