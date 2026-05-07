@@ -1,13 +1,14 @@
 ---
 # Entry point for controlled deployments from Ansible Semaphore.
-# Run this playbook on localhost and pass action/target_clients as extra vars.
+# Extra vars: deploy_action (configure|provision|full), target_clients, etc.
+# No usar la variable extra "action": puede venir vacía desde la UI y romper |default sin segundo argumento.
 
 - name: GesCall controlled deployment
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
-    requested_action: "{{ deploy_action | default(action | default('configure'), true) }}"
+    requested_action: "{{ deploy_action | default('configure', true) | trim }}"
     requested_target_clients: "{{ target_clients | default('') | trim }}"
     requested_gescall_version: "{{ gescall_version | default(lookup('env', 'GESCALL_VERSION') | default('main', true), true) }}"
     allow_all_clients_requested: "{{ allow_all_clients | default(false) | bool }}"
@@ -63,8 +64,8 @@
 
 - name: Run provisioning when requested
   ansible.builtin.import_playbook: provision.yml
-  when: deploy_action | default(action | default('configure')) in ['provision', 'full']
+  when: (deploy_action | default('configure', true) | trim) in ['provision', 'full']
 
 - name: Run application configuration when requested
   ansible.builtin.import_playbook: configure.yml
-  when: deploy_action | default(action | default('configure')) in ['configure', 'full']
+  when: (deploy_action | default('configure', true) | trim) in ['configure', 'full']

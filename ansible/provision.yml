@@ -80,6 +80,7 @@
         body_format: form-urlencoded
         body:
           net0: "name=eth0,bridge=vmbr0,hwaddr={{ ovh_mac }},ip={{ ovh_ip }}/32,gw={{ ovh_gateway }}"
+          nameserver: "8.8.8.8"
           cores: "{{ lxc_cores }}"
           memory: "{{ lxc_memory_mb }}"
           description: "GesCall {{ subdomain }}"
