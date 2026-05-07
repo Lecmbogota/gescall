@@ -116,6 +116,11 @@
       ansible.builtin.shell: go build -o gescall-dialer .
       args:
         chdir: "{{ gescall_install_dir }}/dialer-go"
+    - name: Sync Asterisk ARI password
+      ansible.builtin.shell: |
+        sed -i "s/^password=.*/password={{ ari_pass }}/" /etc/asterisk/ari.conf
+        asterisk -rx "core reload"
+      ignore_errors: yes
 
     - name: Start/reload PM2 processes
       ansible.builtin.shell: |
