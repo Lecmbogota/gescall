@@ -48,7 +48,7 @@
         chdir: "{{ gescall_install_dir }}"
         
     - name: Build frontend (Vite)
-      ansible.builtin.shell: npm install && npm run build
+      ansible.builtin.shell: npm install --legacy-peer-deps && npm run build
       args:
         chdir: "{{ gescall_install_dir }}/front"
       environment:
