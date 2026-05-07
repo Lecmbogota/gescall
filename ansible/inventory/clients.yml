@@ -11,7 +11,7 @@ all:
 
       # Proxmox
       proxmox_node: proxmox
-      proxmox_template_id: 106
+      proxmox_template_id: 120
       lxc_vmid: 110
       lxc_cores: 8
       lxc_memory_mb: 4096
@@ -35,7 +35,7 @@ all:
 
       # Proxmox
       proxmox_node: proxmox
-      proxmox_template_id: 106
+      proxmox_template_id: 120
       lxc_vmid: 115
       lxc_cores: 8
       lxc_memory_mb: 8000
