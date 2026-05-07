@@ -1522,11 +1522,11 @@ class ApiService {
 
   // --- Settings ---
   async getSettings() {
-    return this.request('/api/settings');
+    return this.request('/settings');
   }
 
   async updateSettings(settings: Record<string, string>) {
-    return this.request('/api/settings', {
+    return this.request('/settings', {
       method: 'POST',
       body: JSON.stringify(settings),
     });
