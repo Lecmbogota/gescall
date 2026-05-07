@@ -48,7 +48,10 @@ func NewARIClient() *ARIClient {
 
 type OriginateRequest struct {
 	Endpoint     string `json:"endpoint"`
-	App          string `json:"app"`
+	Extension    string `json:"extension,omitempty"`
+	Context      string `json:"context,omitempty"`
+	Priority     int    `json:"priority,omitempty"`
+	App          string `json:"app,omitempty"`
 	AppArgs      string `json:"appArgs,omitempty"`
 	CallerId     string `json:"callerId,omitempty"`
 	Timeout      int    `json:"timeout"`

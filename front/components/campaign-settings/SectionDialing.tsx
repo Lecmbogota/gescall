@@ -99,21 +99,7 @@ export function SectionDialing({
                     </div>
                 </SettingsCard>
 
-                <SettingsCard
-                    icon={<Network className="w-4 h-4" />}
-                    iconBg="bg-violet-100"
-                    iconText="text-violet-600"
-                    title="Troncal de salida"
-                    description="Ya no se configura aquí."
-                >
-                    <div className="rounded-xl border border-violet-100 bg-violet-50/40 px-4 py-3 text-sm text-slate-700">
-                        <p className="font-medium text-violet-900 mb-1">Enrutamiento centralizado</p>
-                        <p className="text-xs text-slate-600 leading-relaxed">
-                            Define la troncal por campaña en <strong>Sistema → Enrutamiento</strong>, pestaña <strong>Rutas salientes</strong>.
-                            La vista General de esta campaña muestra la troncal efectiva que usará el dialer.
-                        </p>
-                    </div>
-                </SettingsCard>
+
 
                 <SettingsCard
                     icon={<Activity className="w-4 h-4" />}

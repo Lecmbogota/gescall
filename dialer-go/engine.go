@@ -656,10 +656,11 @@ func (d *DialerEngine) launchCall(leadJSON string, camp Campaign) {
 
 	// Make the ARI channel request
 	channelID, err := d.ariClient.Originate(OriginateRequest{
-		Endpoint: endpointURI,
-		App:      "gescall-ivr",
-		AppArgs:  "outbound", // Explicit app arg to identify outbound
-		CallerId: formattedCid,
+		Endpoint:  endpointURI,
+		Extension: "s",
+		Context:   "gescall-outbound-router",
+		Priority:  1,
+		CallerId:  formattedCid,
 		Timeout:  35, // typical ring timeout
 		Variables: map[string]string{
 			"leadid": leadID,

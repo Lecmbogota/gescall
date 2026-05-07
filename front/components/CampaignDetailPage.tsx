@@ -95,7 +95,19 @@ import {
     HardDrive,
     FileAudio,
     Link2,
+    Ear,
+    MessageSquare,
+    UserCheck,
+    LogOut,
+    MoreHorizontal,
 } from "lucide-react";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { UploadWizardContent } from "./UploadWizardContent";
 import { toast } from "sonner";
 import {
@@ -461,6 +473,40 @@ export function CampaignDetailPage({
 }: CampaignDetailPageProps) {
     const timezone = useSettingsStore((state) => state.timezone);
     const [activeTab, setActiveTab] = useState(campaign.campaign_type === 'BLASTER' ? "reports" : "monitor");
+    const [loadingActionUser, setLoadingActionUser] = useState<string | null>(null);
+
+    const handleSupervisorAction = async (agentUsername: string, agentName: string, action: 'spy' | 'whisper' | 'force-ready' | 'remote-logout') => {
+        // Toggle logic for spy/whisper
+        if (action === 'spy' || action === 'whisper') {
+            const currentStatus = (window as any)._supervisorCallStatus;
+            if (currentStatus === 'incall' || currentStatus === 'calling') {
+                window.dispatchEvent(new Event('supervisor:hangup'));
+                toast.success('Escucha finalizada');
+                return;
+            }
+        }
+
+        setLoadingActionUser(agentUsername);
+        try {
+            if (action === 'spy') {
+                await api.supervisorSpyAgent(agentUsername);
+                toast.success(`Escucha iniciada sobre ${agentName}`);
+            } else if (action === 'whisper') {
+                await api.supervisorWhisperAgent(agentUsername);
+                toast.success(`Susurro iniciado con ${agentName}`);
+            } else if (action === 'force-ready') {
+                await api.supervisorForceReadyAgent(agentUsername);
+                toast.success(`${agentName} forzado a estado READY`);
+            } else if (action === 'remote-logout') {
+                await api.supervisorRemoteLogoutAgent(agentUsername);
+                toast.success(`Logout remoto ejecutado para ${agentName}`);
+            }
+        } catch (e: any) {
+            toast.error(e.message || 'Error ejecutando la acción sobre el agente');
+        } finally {
+            setLoadingActionUser(null);
+        }
+    };
 
     // La pestaña de plantillas TTS solo existe en BLASTER; evitar estado huérfano
     useEffect(() => {
@@ -2019,6 +2065,7 @@ export function CampaignDetailPage({
                                                 <th className="px-6 py-4">Extensión</th>
                                                 <th className="px-6 py-4">Estado</th>
                                                 <th className="px-6 py-4">Duración</th>
+                                                <th className="px-6 py-4 text-right">Acciones</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
@@ -2072,7 +2119,7 @@ export function CampaignDetailPage({
                                                 }
 
                                                 return (
-                                                    <tr key={agent.username} className={`transition-colors ${rowColorClass}`}>
+                                                    <tr key={agent.username} className={`group transition-colors ${rowColorClass}`}>
                                                         <td className="px-6 py-4 font-medium text-slate-800">{agent.name}</td>
                                                         <td className="px-6 py-4 text-slate-500">@{agent.username}</td>
                                                         <td className="px-6 py-4">
@@ -2083,12 +2130,63 @@ export function CampaignDetailPage({
                                                         <td className="px-6 py-4 font-mono text-slate-600">
                                                             {stateObj.lastChange ? formatDuration(Math.floor((now - stateObj.lastChange) / 1000)) : '-'}
                                                         </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8 px-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50"
+                                                                    disabled={loadingActionUser === agent.username || (state !== 'ON_CALL' && state !== 'INCALL')}
+                                                                    onClick={() => handleSupervisorAction(agent.username, agent.name, 'spy')}
+                                                                    title="Espiar llamada"
+                                                                >
+                                                                    <Ear className="w-4 h-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8 px-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50"
+                                                                    disabled={loadingActionUser === agent.username || (state !== 'ON_CALL' && state !== 'INCALL')}
+                                                                    onClick={() => handleSupervisorAction(agent.username, agent.name, 'whisper')}
+                                                                    title="Susurrar al agente"
+                                                                >
+                                                                    <MessageSquare className="w-4 h-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8 px-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"
+                                                                    disabled={loadingActionUser === agent.username || state === 'ON_CALL' || state === 'INCALL'}
+                                                                    onClick={() => handleSupervisorAction(agent.username, agent.name, 'force-ready')}
+                                                                    title="Forzar Disponible"
+                                                                >
+                                                                    <UserCheck className="w-4 h-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8 px-2 text-slate-500 hover:text-red-600 hover:bg-red-50 border-red-100"
+                                                                    disabled={loadingActionUser === agent.username}
+                                                                    onClick={() => {
+                                                                        if (window.confirm(`¿Cerrar sesión de ${agent.name} remotamente?`)) {
+                                                                            handleSupervisorAction(agent.username, agent.name, 'remote-logout');
+                                                                        }
+                                                                    }}
+                                                                    title="Desconectar (Logout)"
+                                                                >
+                                                                    <LogOut className="w-4 h-4" />
+                                                                </Button>
+                                                                {loadingActionUser === agent.username && (
+                                                                    <Loader2 className="w-4 h-4 animate-spin text-slate-400 ml-1" />
+                                                                )}
+                                                            </div>
+                                                        </td>
                                                     </tr>
                                                 );
                                             })}
                                             {allAgents.filter(a => campaignAgents.includes(a.username) && (a as any).state !== 'OFFLINE' && (a as any).state !== 'UNKNOWN').length === 0 && (
                                                 <tr>
-                                                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500 italic">No hay agentes conectados o en turno en esta campaña.</td>
+                                                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500 italic">No hay agentes conectados o en turno en esta campaña.</td>
                                                 </tr>
                                             )}
                                         </tbody>

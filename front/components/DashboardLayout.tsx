@@ -46,6 +46,7 @@ import { GlobalSupervisorChatWidget } from "./GlobalSupervisorChatWidget";
 import { toast } from "sonner";
 import logoChock from "../logo chock.png";
 import { useAuthStore } from "@/stores/authStore";
+import { SupervisorWebPhone } from "./SupervisorWebPhone";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -638,6 +639,7 @@ export function DashboardLayout({
       {/* Background Services */}
       <BackgroundTasksPanel />
       <BackgroundSocketManager />
+      <SupervisorWebPhone />
       <GlobalSupervisorChatWidget
         username={username}
         enabled={currentPage !== 'agent-workspace' && canUseSupervisorChat}

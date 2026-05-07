@@ -1562,6 +1562,11 @@ export const AgentWorkspace: React.FC = () => {
               <div className="flex flex-col">
                 <span className="text-sm font-bold text-slate-800 leading-tight">{agentUsername}</span>
                 <span className="text-[10px] text-slate-500 uppercase">Extensión {sipExtension || 'N/A'}</span>
+                {campaignName && (
+                  <span className="text-[10px] font-bold text-slate-600 mt-1 truncate max-w-[150px]" title={`Campaña activa: ${campaignName}`}>
+                    {campaignName}
+                  </span>
+                )}
                 {agentCampaignType && agentCampaignType !== 'BLASTER' && (
                   <span className={`text-[9px] font-bold uppercase mt-0.5 ${agentCampaignType === 'OUTBOUND_PREDICTIVE' ? 'text-blue-600 bg-blue-50 border-blue-200' : agentCampaignType === 'OUTBOUND_PROGRESSIVE' ? 'text-purple-600 bg-purple-50 border-purple-200' : 'text-green-600 bg-green-50 border-green-200'} px-1.5 py-0.5 rounded-full border inline-block w-fit`}>
                     {agentCampaignType === 'OUTBOUND_PREDICTIVE' ? 'Predictivo' : agentCampaignType === 'OUTBOUND_PROGRESSIVE' ? 'Progresivo' : agentCampaignType}

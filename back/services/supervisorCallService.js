@@ -82,10 +82,18 @@ async function attachSupervisorLegToSnoop(ari, snoopChannelId, actorUsername, mo
     if (monitorChannel && monitorChannel.id) {
       try { await ari.channels.hangup({ channelId: monitorChannel.id }); } catch (_) {}
     }
+    const errorMessage = e.message || '';
+    if (errorMessage.includes('Allocation failed')) {
+      return {
+        ok: false,
+        code: 'SUPERVISOR_ATTACH_FAILED',
+        error: 'El PBX rechazó la llamada al supervisor (Allocation failed). Verifica que la extensión SIP del supervisor exista, esté registrada y disponible.',
+      };
+    }
     return {
       ok: false,
       code: 'SUPERVISOR_ATTACH_FAILED',
-      error: e.message || 'No fue posible enlazar el supervisor al canal de supervisión.',
+      error: errorMessage || 'No fue posible enlazar el supervisor al canal de supervisión.',
     };
   }
 }
@@ -233,8 +241,8 @@ async function resolveAgentVoiceChannel(username) {
 }
 
 /**
- * Spy: audio de la llamada hacia canal snoop sin whisper.
- * Whisper: audio desde el canal de snoop hacia el agente (coach); parámetros ARI según documentación Asterisk.
+ * Spy: audio de la llamada usando ChanSpy.
+ * Whisper: igual pero con opción 'w'.
  */
 async function createSupervisorSnoop(mode, username, actorUsername) {
   const resolved = await resolveAgentVoiceChannel(username);
@@ -245,53 +253,57 @@ async function createSupervisorSnoop(mode, username, actorUsername) {
     return { error: 'ARI no está conectado.', code: 'ARI_UNAVAILABLE' };
   }
 
-  const spy =
-    mode === 'whisper'
-      ? process.env.SUPERVISOR_SNOOP_SPY_WHISPER || 'both'
-      : process.env.SUPERVISOR_SNOOP_SPY_SPY || 'both';
-  const whisper =
-    mode === 'whisper'
-      ? process.env.SUPERVISOR_SNOOP_WHISPER || 'both'
-      : process.env.SUPERVISOR_SNOOP_WHISPER_NONE || 'none';
+  const sup = await getSupervisorSipRow(actorUsername);
+  const endpoint = buildSupervisorEndpoint(sup.sip_extension);
+  if (!endpoint) {
+    return {
+      error: 'No se pudo resolver endpoint del supervisor (extensión).',
+      code: 'SUPERVISOR_ENDPOINT_MISSING',
+    };
+  }
+
+  const agentSip = await getAgentSipRow(username);
+  if (!agentSip.sip_extension) {
+    return { error: 'Agente sin extensión SIP, no se puede espiar.', code: 'SIP_EXTENSION_MISSING' };
+  }
+
+  // ChanSpy options: 'q' = quiet, 'w' = whisper
+  const spyOpts = mode === 'whisper' ? 'qw' : 'q';
+  const spyChannelPrefix = `PJSIP/${agentSip.sip_extension}`;
 
   try {
-    const snoopChannel = await ari.channels.snoopChannel({
-      channelId: resolved.channelId,
-      app: STASIS_SUPERVISOR_APP,
-      appArgs: mode === 'whisper' ? 'supervisor_whisper' : 'supervisor_spy',
-      snoopId: `sup-${username}-${Date.now()}`,
-      spy,
-      whisper,
+    await ari.channels.originate({
+      endpoint,
+      extension: 's',
+      context: 'gescall-supervisor-spy',
+      priority: 1,
+      callerId: actorUsername ? `"${actorUsername}" <${actorUsername}>` : undefined,
+      variables: {
+        SPY_CHANNEL: spyChannelPrefix,
+        SPY_OPTS: spyOpts
+      }
     });
-    const snoopId = snoopChannel && snoopChannel.id ? snoopChannel.id : null;
-    if (!snoopId) {
-      return { error: 'ARI devolvió snoop sin id de canal.', code: 'SNOOP_EMPTY' };
-    }
-
-    const attach = await attachSupervisorLegToSnoop(ari, snoopId, actorUsername, mode);
-    if (!attach.ok) {
-      try { await ari.channels.hangup({ channelId: snoopId }); } catch (_) {}
-      return { error: attach.error, code: attach.code };
-    }
-
+    
     return {
       success: true,
       data: {
         agent_username: username,
-        agent_channel_id: resolved.channelId,
-        channel_resolution: resolved.source,
-        snoop_channel_id: snoopId,
         mode,
-        actor_username: actorUsername || null,
-        ...attach.data,
-      },
+        actor_username: actorUsername,
+        method: 'ChanSpy'
+      }
     };
   } catch (e) {
-    console.error('[supervisorCallService] snoop:', e.message || e);
+    console.error('[supervisorCallService] ChanSpy failed:', e.message || e);
+    const errorMessage = e.message || '';
+    if (errorMessage.includes('Allocation failed')) {
+      return {
+        error: 'El PBX rechazó la llamada al supervisor (Allocation failed). Verifica que la extensión SIP del supervisor exista y esté conectada.',
+        code: 'SUPERVISOR_ATTACH_FAILED',
+      };
+    }
     return {
-      error:
-        e.message ||
-        'Fallo al iniciar canal de supervisión PBX (snoop). Compruebe permisos ARI y que el canal del agente exista.',
+      error: errorMessage || 'Fallo al ejecutar ChanSpy.',
       code: 'SNOOP_FAILED',
     };
   }
@@ -462,7 +474,7 @@ async function applyRemoteLogout(io, username, options = {}) {
 
   await enrichAndEmitDashboard(io, username, {
     state: 'OFFLINE',
-    last_change,
+    last_change: String(lastChange),
     shift_day,
     shift_accum_sec: String(shift_accum_sec),
   });
