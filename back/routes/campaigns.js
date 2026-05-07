@@ -503,7 +503,7 @@ router.get('/:campaign_id/lists', async (req, res) => {
             FROM gescall_lists l
             LEFT JOIN gescall_leads led ON l.list_id = led.list_id
             WHERE l.campaign_id = $1
-            GROUP BY l.list_id, l.tenant_id
+            GROUP BY l.list_id
             ORDER BY l.list_id DESC
         `, [campaign_id]);
         const rowsWithMappedActive = rows.map(r => ({
@@ -1422,13 +1422,11 @@ router.post('/create', async (req, res) => {
 
         console.log(`[pg_campaigns] Creating campaign: ${cid} - ${cname} [${campaign_type}]`);
 
-        const tenant_id = req.user?.tenant_id || 1;
-
         // Insert into gescall_campaigns
         await pg.query(
-            `INSERT INTO gescall_campaigns (campaign_id, campaign_name, active, archived, dial_prefix, dial_method, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor, tenant_id)
-             VALUES ($1, $2, false, false, $3, 'RATIO', $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [cid, cname, dial_prefix, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor, tenant_id]
+            `INSERT INTO gescall_campaigns (campaign_id, campaign_name, active, archived, dial_prefix, dial_method, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor)
+             VALUES ($1, $2, false, false, $3, 'RATIO', $4, $5, $6, $7, $8, $9, $10)`,
+            [cid, cname, dial_prefix, auto_dial_level, max_retries, campaign_cid, campaign_type, predictive_target_drop_rate, predictive_min_factor, predictive_max_factor]
         );
 
         // Seed default dispositions for the new campaign
