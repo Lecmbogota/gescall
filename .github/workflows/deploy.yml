@@ -1,72 +1,55 @@
-name: Deploy to Production
+name: Deploy to Production Servers
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Git ref (branch, tag, commit)'
-        required: false
-        default: 'main'
-      limit:
-        description: 'Clients to target (hostname or group, empty = all)'
-        required: false
-        default: ''
-      provision:
-        description: 'Also provision new LXCs? (only needed for new clients)'
-        type: boolean
-        required: false
-        default: false
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'ansible/**'
+      - '.github/**'
+      - 'database_schemas/**'
+      - 'README.md'
 
 jobs:
-  tests:
-    name: Run Tests
-    uses: ./.github/workflows/test.yml
-
   deploy:
-    name: Deploy
-    needs: tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # IPs of the active production servers (Experto and Aspec)
+        server: [72.251.5.148, 72.251.5.152]
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          ref: ${{ github.event.inputs.version || github.ref }}
-
-      - name: Setup SSH key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.GESCALL_DEPLOY_SSH_KEY }}
-
-      - name: Install Ansible + collections
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ansible
-          ansible-galaxy collection install -r ansible/requirements.yml
-
-      - name: Provision new LXCs (only if requested)
-        if: github.event.inputs.provision == 'true'
-        env:
-          PROXMOX_HOST: ${{ secrets.PROXMOX_HOST }}
-          PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
-          PROXMOX_PASSWORD: ${{ secrets.PROXMOX_PASSWORD }}
-          HOSTINGER_TOKEN: ${{ secrets.HOSTINGER_TOKEN }}
-        run: |
-          ansible-playbook -i ansible/inventory/clients.yml ansible/provision.yml \
-            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
-
-      - name: Configure all clients (deploy app)
-        env:
-          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
-          ARI_PASS: ${{ secrets.ARI_PASS }}
-          GESCALL_VERSION: ${{ github.event.inputs.version || github.ref_name }}
-        run: |
-          ansible-playbook -i ansible/inventory/clients.yml ansible/configure.yml \
-            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "Ref: ${{ github.event.inputs.version || github.ref_name }}"
-          echo "Clients: ${{ github.event.inputs.limit || 'all' }}"
-          echo "Provision: ${{ github.event.inputs.provision || 'false' }}"
+          host: ${{ matrix.server }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Starting deployment on $(hostname)..."
+            cd /opt/gescall
+            
+            # Pull latest changes
+            git fetch --all
+            git reset --hard origin/main
+            
+            # Update Backend
+            cd /opt/gescall/back
+            npm install --production
+            
+            # Run migrations
+            set -a; source .env; set +a
+            for f in $(ls migrations/*.js 2>/dev/null | sort); do
+              echo "Running $f"
+              node "$f"
+            done
+            
+            # Restart backend
+            pm2 restart gescall-backend
+            
+            # Update Frontend
+            cd /opt/gescall/front
+            npm install
+            npm run build
+            
+            echo "Deployment completed successfully on $(hostname)!"

@@ -1,0 +1,42 @@
+---
+- name: Fast update for GesCall code
+  hosts: clients
+  become: yes
+  gather_facts: false
+  vars:
+    gescall_install_dir: /opt/gescall
+    
+  tasks:
+    - name: Fetch latest code from GitHub
+      ansible.builtin.git:
+        repo: "https://github.com/Lecmbogota/gescall.git"
+        dest: "{{ gescall_install_dir }}"
+        version: "main"
+        force: yes
+
+    - name: Install backend npm dependencies
+      community.general.npm:
+        path: "{{ gescall_install_dir }}/back"
+        production: yes
+
+    - name: Run PostgreSQL migrations
+      ansible.builtin.shell: |
+        set -a; source .env; set +a
+        for f in $(ls migrations/*.js 2>/dev/null | sort); do
+          node "$f"
+        done
+      args:
+        chdir: "{{ gescall_install_dir }}/back"
+      ignore_errors: yes
+
+    - name: Restart PM2 backend process
+      ansible.builtin.shell: pm2 restart gescall-backend
+      args:
+        chdir: "{{ gescall_install_dir }}"
+        
+    - name: Build frontend (Vite)
+      ansible.builtin.shell: npm install && npm run build
+      args:
+        chdir: "{{ gescall_install_dir }}/front"
+      environment:
+        NODE_ENV: production
