@@ -43,11 +43,6 @@ export function getDetailDisplayStatus(
     leadStatus: string | null | undefined,
     typificationName?: string | null | undefined
 ): DetailStatus {
-    // 0. Tipificación del Agente (Máxima prioridad)
-    if (typificationName) {
-        return { label: typificationName, color: 'bg-emerald-500', description: `Llamada tipificada por agente: ${typificationName}` };
-    }
-
     const cs = (callStatus || '').toUpperCase();
     const ls = (leadStatus || '').toUpperCase();
 
@@ -123,11 +118,6 @@ export function getReportDisplayStatus(
     leadStatus: string | null | undefined,
     typificationName?: string | null | undefined
 ): ReportStatus {
-    // 0. Tipificación del Agente (Máxima prioridad)
-    if (typificationName) {
-        return { label: typificationName, color: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
-    }
-
     const cs = (callStatus || '').toUpperCase();
     const ls = (leadStatus || '').toUpperCase();
 
