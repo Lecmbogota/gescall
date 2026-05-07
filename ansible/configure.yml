@@ -73,9 +73,18 @@
         ci: yes
 
     - name: Sync PostgreSQL password and fix table ownership
-      ansible.builtin.shell: >
-        su - postgres -c "psql -c \"ALTER USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';\"" &&
-        su - postgres -c "psql -d {{ pg_database }} -c \"DO \$\$ DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP EXECUTE 'ALTER TABLE public.' || quote_ident(r.tablename) || ' OWNER TO {{ pg_user }}'; END LOOP; END \$\$;\""
+      ansible.builtin.shell: |
+        su - postgres -c "psql -c \"ALTER USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';\""
+        cat << 'EOF' > /tmp/fix_owner.sql
+        DO $$ 
+        DECLARE r RECORD; 
+        BEGIN 
+          FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP 
+            EXECUTE 'ALTER TABLE public.' || quote_ident(r.tablename) || ' OWNER TO {{ pg_user }}'; 
+          END LOOP; 
+        END $$;
+        EOF
+        su - postgres -c "psql -d {{ pg_database }} -f /tmp/fix_owner.sql"
 
     - name: Run PostgreSQL migrations
       ansible.builtin.shell: |
