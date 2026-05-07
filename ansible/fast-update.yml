@@ -33,6 +33,16 @@
       ansible.builtin.shell: pm2 restart gescall-backend
       args:
         chdir: "{{ gescall_install_dir }}"
+
+    - name: Build Go dialer
+      ansible.builtin.shell: go build -o gescall-dialer .
+      args:
+        chdir: "{{ gescall_install_dir }}/dialer-go"
+
+    - name: Restart PM2 Go dialer process
+      ansible.builtin.shell: pm2 restart gescall-dialer || echo "Dialer no estaba corriendo"
+      args:
+        chdir: "{{ gescall_install_dir }}"
         
     - name: Build frontend (Vite)
       ansible.builtin.shell: npm install && npm run build
