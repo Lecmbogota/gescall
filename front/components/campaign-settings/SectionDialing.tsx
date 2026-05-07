@@ -57,19 +57,29 @@ export function SectionDialing({
                 >
                     <div className="flex flex-col gap-5">
                         <div>
-                            <Label htmlFor="dialLevel" className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">
-                                Ratio de marcación
-                            </Label>
-                            <Select value={dialLevel?.toString() || "1.0"} onValueChange={setDialLevel}>
-                                <SelectTrigger id="dialLevel" className="font-mono text-lg h-11 w-full bg-white shadow-sm">
-                                    <SelectValue placeholder="Ratio" />
-                                </SelectTrigger>
-                                <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                                    {[1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0].map((ratio) => (
-                                        <SelectItem key={ratio} value={ratio.toFixed(1)}>{ratio.toFixed(1)}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <div className="flex justify-between items-center mb-1.5">
+                                <Label htmlFor="dialLevel" className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                                    Ratio de marcación
+                                </Label>
+                                <span className="text-sm font-mono font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                                    {parseFloat(dialLevel || "1.0").toFixed(1)}
+                                </span>
+                            </div>
+                            <Input
+                                id="dialLevel"
+                                type="range"
+                                min="1"
+                                max="100"
+                                step="1"
+                                value={parseFloat(dialLevel || "1")}
+                                onChange={(e) => setDialLevel(parseFloat(e.target.value).toFixed(1))}
+                                className="w-full h-2 accent-blue-500 cursor-pointer"
+                            />
+                            <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
+                                <span>1.0</span>
+                                <span>50.0</span>
+                                <span>100.0</span>
+                            </div>
                         </div>
 
                         {cpsAvailability && (
