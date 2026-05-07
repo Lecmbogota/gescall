@@ -51,5 +51,3 @@
       ansible.builtin.shell: npm install --legacy-peer-deps && npm run build
       args:
         chdir: "{{ gescall_install_dir }}/front"
-      environment:
-        NODE_ENV: production
