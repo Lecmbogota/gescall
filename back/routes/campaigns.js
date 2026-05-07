@@ -1287,10 +1287,12 @@ router.post('/consolidated', async (req, res) => {
                 l.tts_vars,
                 ls.list_name,
                 ls.list_name as list_description,
-                cl.uniqueid
+                cl.uniqueid,
+                t.name as typification_name
             FROM gescall_call_log cl
             LEFT JOIN gescall_leads l ON cl.lead_id = l.lead_id
             LEFT JOIN gescall_lists ls ON cl.list_id = ls.list_id
+            LEFT JOIN gescall_typifications t ON cl.typification_id = t.id
             WHERE cl.campaign_id = ANY($1)
               AND cl.call_date BETWEEN $2 AND $3
             ORDER BY cl.call_date DESC
