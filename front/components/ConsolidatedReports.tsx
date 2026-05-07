@@ -50,6 +50,7 @@ interface CallRecord {
     list_name?: string;
     list_description?: string;
     length_in_sec?: number;
+    typification_name?: string;
 }
 
 interface CampaignOption {
@@ -60,7 +61,7 @@ interface CampaignOption {
 // dateUtils.ts replaces formatDateForAPI
 
 const getDisplayStatus = (record: CallRecord): { label: string; color: string } => {
-    return getReportDisplayStatus(record.call_status, record.dtmf_pressed, record.lead_status);
+    return getReportDisplayStatus(record.call_status, record.dtmf_pressed, record.lead_status, record.typification_name);
 };
 
 type ExportFormat = "csv" | "excel" | "pdf";
