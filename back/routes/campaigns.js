@@ -1305,9 +1305,21 @@ router.post('/consolidated', async (req, res) => {
 
         console.log(`[pg_campaigns] Consolidated Report: ${campaigns.join(',')}, Records: ${rows.length}`);
 
+        // Group campaigns to fetch their dispositions efficiently
+        const uniqueCampaigns = [...new Set(rows.map(r => r.campaign_id))];
+        const dispositionsByCampaign = {};
+        for (const cid of uniqueCampaigns) {
+            dispositionsByCampaign[cid] = await getCampaignDispositionsCached(cid);
+        }
+
+        const dataWithDisposition = rows.map(record => ({
+            ...record,
+            disposition: resolveDisposition(record, dispositionsByCampaign[record.campaign_id] || [])
+        }));
+
         res.json({
             success: true,
-            data: rows,
+            data: dataWithDisposition,
             meta: {
                 campaigns: campaigns.length,
                 records: rows.length,
