@@ -1432,40 +1432,7 @@ router.post('/create', async (req, res) => {
         // Seed default dispositions for the new campaign
         await seedDefaultDispositions(cid);
 
-        // Create a user assigned to this campaign
-        const userPass = `Gc${cid}!`;
-        const password_hash = await bcrypt.hash(userPass, 10);
-        const { rows: existingUser } = await pg.query('SELECT username FROM gescall_users WHERE username = $1', [cid]);
-        if (existingUser.length === 0) {
-            const roleNames = ['SUPER-ADMIN', 'ADMINISTRADOR', 'ADMIN'];
-            let campaignUserRoleId;
-            for (const name of roleNames) {
-                const { rows } = await pg.query(
-                    'SELECT role_id FROM gescall_roles WHERE role_name ILIKE $1 LIMIT 1',
-                    [name]
-                );
-                if (rows[0]?.role_id != null) {
-                    campaignUserRoleId = rows[0].role_id;
-                    break;
-                }
-            }
-            if (campaignUserRoleId == null) {
-                const { rows: sysRows } = await pg.query(
-                    `SELECT role_id FROM gescall_roles WHERE is_system = true ORDER BY role_id LIMIT 1`
-                );
-                campaignUserRoleId = sysRows[0]?.role_id;
-            }
-            if (campaignUserRoleId == null) {
-                throw new Error(
-                    'No hay rol de administración en gescall_roles (SUPER-ADMIN, ADMINISTRADOR o rol is_system). Revise la tabla gescall_roles.'
-                );
-            }
-            await pg.query(
-                `INSERT INTO gescall_users (username, password_hash, role_id) VALUES ($1, $2, $3)`,
-                [cid, password_hash, campaignUserRoleId]
-            );
-        }
-
+        // Removed: Auto-creation of campaign-specific admin users (security and logic issue)
         // CallerID settings
         try {
             await pg.query(
